@@ -87,3 +87,32 @@ def test_backend_non_python_command_rejected_at_load_time(tmp_path: Path) -> Non
     )
     with pytest.raises(config.ConfigError, match="must start with 'python'"):
         config.load(write_config(tmp_path, body))
+
+
+def test_start_timeout_defaults_to_30(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, SAMPLE_YAML))
+    assert cfg.projects[0].start_timeout == 30
+
+
+def test_start_timeout_parsed_when_provided(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + "\n    start_timeout: 60\n"
+    cfg = config.load(write_config(tmp_path, yaml_body))
+    assert cfg.projects[0].start_timeout == 60
+
+
+def test_start_timeout_rejects_zero(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + "\n    start_timeout: 0\n"
+    with pytest.raises(config.ConfigError):
+        config.load(write_config(tmp_path, yaml_body))
+
+
+def test_start_timeout_rejects_negative(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + "\n    start_timeout: -5\n"
+    with pytest.raises(config.ConfigError):
+        config.load(write_config(tmp_path, yaml_body))
+
+
+def test_start_timeout_rejects_non_integer(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + '\n    start_timeout: "nope"\n'
+    with pytest.raises(config.ConfigError):
+        config.load(write_config(tmp_path, yaml_body))

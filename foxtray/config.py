@@ -59,6 +59,7 @@ class Project:
     url: str
     backend: Backend
     frontend: Frontend
+    start_timeout: int = 30
 
 
 @dataclass(frozen=True)
@@ -100,11 +101,21 @@ def _parse_frontend(raw: dict[str, Any]) -> Frontend:
 
 def _parse_project(raw: dict[str, Any]) -> Project:
     name = _require(raw, "name", "project")
+    start_timeout_raw = raw.get("start_timeout", 30)
+    if not isinstance(start_timeout_raw, int) or isinstance(start_timeout_raw, bool):
+        raise ConfigError(
+            f"project {name!r}: start_timeout must be a positive integer, got {start_timeout_raw!r}"
+        )
+    if start_timeout_raw <= 0:
+        raise ConfigError(
+            f"project {name!r}: start_timeout must be > 0, got {start_timeout_raw}"
+        )
     return Project(
         name=name,
         url=_require(raw, "url", f"project {name!r}"),
         backend=_parse_backend(_require(raw, "backend", f"project {name!r}")),
         frontend=_parse_frontend(_require(raw, "frontend", f"project {name!r}")),
+        start_timeout=start_timeout_raw,
     )
 
 
