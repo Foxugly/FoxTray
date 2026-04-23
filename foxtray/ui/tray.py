@@ -22,12 +22,15 @@ class MenuItemSpec:
     text: str
     action: Callable[[], None] | None = None
     enabled: bool = True
-    submenu: tuple["MenuItemSpec", ...] = field(default_factory=tuple)
+    submenu: tuple[MenuItemSpec, ...] = field(default_factory=tuple)
     separator: bool = False
 
 
 @dataclass
 class Handlers:
+    """Menu-action callbacks. Intentionally mutable: TrayApp rebuilds a fresh
+    instance per menu paint, so callers should not cache instances."""
+
     on_start: Callable[[config_mod.Project], None]
     on_stop: Callable[[config_mod.Project], None]
     on_open_browser: Callable[[config_mod.Project], None]
