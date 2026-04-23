@@ -38,5 +38,10 @@ def task_log_file(key: str) -> Path:
     return appdata_root() / "logs" / "tasks" / f"{sanitized}.log"
 
 
+def tray_lock_file() -> Path:
+    """Path to the single-instance PID lock for the tray."""
+    return appdata_root() / "tray.lock"
+
+
 def ensure_dirs() -> None:
     logs_dir().mkdir(parents=True, exist_ok=True)
