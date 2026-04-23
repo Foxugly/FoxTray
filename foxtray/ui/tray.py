@@ -40,6 +40,14 @@ class Handlers:
     on_stop_all_and_exit: Callable[[], None]
 
 
+def _status_to_icon_state(status: ProjectStatus) -> IconState:
+    if status.backend_alive and status.frontend_alive:
+        return "running"
+    if status.backend_alive or status.frontend_alive:
+        return "partial"
+    return "stopped"
+
+
 def compute_icon_state(
     active: state_mod.ActiveProject | None,
     statuses: dict[str, ProjectStatus],
@@ -49,11 +57,7 @@ def compute_icon_state(
     status = statuses.get(active.name)
     if status is None:
         return "stopped"
-    if status.backend_alive and status.frontend_alive:
-        return "running"
-    if status.backend_alive or status.frontend_alive:
-        return "partial"
-    return "stopped"
+    return _status_to_icon_state(status)
 
 
 def _project_icon_state(
@@ -63,11 +67,7 @@ def _project_icon_state(
 ) -> IconState:
     if active is None or active.name != name or status is None:
         return "stopped"
-    if status.backend_alive and status.frontend_alive:
-        return "running"
-    if status.backend_alive or status.frontend_alive:
-        return "partial"
-    return "stopped"
+    return _status_to_icon_state(status)
 
 
 def _dead_component(prev: ProjectStatus, curr: ProjectStatus) -> str:
@@ -75,7 +75,14 @@ def _dead_component(prev: ProjectStatus, curr: ProjectStatus) -> str:
         return "backend"
     if prev.frontend_alive and not curr.frontend_alive:
         return "frontend"
-    return "unknown"
+    # Called only when caller has already determined a running→partial transition,
+    # which mathematically requires exactly one component to have died. Reaching
+    # here means the caller violated its invariant.
+    raise AssertionError(
+        "_dead_component called without a single-component death; "
+        f"prev(backend={prev.backend_alive}, frontend={prev.frontend_alive}) "
+        f"curr(backend={curr.backend_alive}, frontend={curr.frontend_alive})"
+    )
 
 
 def compute_transitions(
