@@ -8,7 +8,14 @@ from PIL import Image
 
 IconState = Literal["running", "partial", "stopped"]
 
+# This file sits at `foxtray/ui/icons.py` — three .parent hops reach the repo root.
+# If this file ever moves, adjust the depth to keep _ASSETS pointing at <repo>/assets.
 _ASSETS = Path(__file__).resolve().parent.parent.parent / "assets"
+
+# Not guarded by a lock. The GIL prevents corruption of the dict, and Image
+# objects are never mutated after creation, so the worst race case is two
+# threads briefly holding different in-memory copies of the same pixel data —
+# harmless for our read-only consumers (pystray's image serialiser).
 _cache: dict[IconState, Image.Image] = {}
 
 
