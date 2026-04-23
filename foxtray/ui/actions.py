@@ -13,12 +13,16 @@ from foxtray.project import Orchestrator
 log = logging.getLogger(__name__)
 
 
-class _Notifier(Protocol):
+class Notifier(Protocol):
     def notify(self, message: str, title: str = "") -> None: ...
 
 
-class _Closable(Protocol):
+class Closable(Protocol):
     def stop(self) -> None: ...
+
+
+class NotifierClosable(Notifier, Closable, Protocol):
+    """Combined Protocol for icons that must both notify and shut down."""
 
 
 def _open_url(url: str) -> None:
@@ -29,12 +33,12 @@ def _open_folder_native(path: Path) -> None:
     os.startfile(str(path))  # noqa: S606 — Windows-only, user-initiated
 
 
-def _notify_error(icon: _Notifier, exc: Exception) -> None:
+def _notify_error(icon: Notifier, exc: Exception) -> None:
     log.warning("tray handler failed", exc_info=True)
     icon.notify(str(exc), title="FoxTray error")
 
 
-def on_start(orchestrator: Orchestrator, project: config.Project, icon: _Notifier) -> None:
+def on_start(orchestrator: Orchestrator, project: config.Project, icon: Notifier) -> None:
     try:
         orchestrator.start(project)
     except Exception as exc:  # noqa: BLE001 — tray must survive any handler error
@@ -44,7 +48,7 @@ def on_start(orchestrator: Orchestrator, project: config.Project, icon: _Notifie
 def on_stop(
     orchestrator: Orchestrator,
     project: config.Project,
-    icon: _Notifier,
+    icon: Notifier,
     user_initiated: set[str],
 ) -> None:
     user_initiated.add(project.name)
@@ -54,14 +58,14 @@ def on_stop(
         _notify_error(icon, exc)
 
 
-def on_open_browser(project: config.Project, icon: _Notifier) -> None:
+def on_open_browser(project: config.Project, icon: Notifier) -> None:
     try:
         _open_url(project.url)
     except Exception as exc:  # noqa: BLE001
         _notify_error(icon, exc)
 
 
-def on_open_folder(path: Path, icon: _Notifier) -> None:
+def on_open_folder(path: Path, icon: Notifier) -> None:
     try:
         _open_folder_native(path)
     except Exception as exc:  # noqa: BLE001
@@ -70,7 +74,7 @@ def on_open_folder(path: Path, icon: _Notifier) -> None:
 
 def on_stop_all(
     orchestrator: Orchestrator,
-    icon: _Notifier,
+    icon: Notifier,
     user_initiated: set[str],
     active_names: Sequence[str],
 ) -> None:
@@ -82,13 +86,14 @@ def on_stop_all(
         _notify_error(icon, exc)
 
 
-def on_exit(icon: _Closable) -> None:
+def on_exit(icon: Closable) -> None:
+    # If icon.stop() raises, let it propagate — shutdown should be loud.
     icon.stop()
 
 
 def on_stop_all_and_exit(
     orchestrator: Orchestrator,
-    icon: _Closable,
+    icon: NotifierClosable,
     user_initiated: set[str],
     active_names: Sequence[str],
 ) -> None:
@@ -97,7 +102,8 @@ def on_stop_all_and_exit(
     try:
         orchestrator.stop_all()
     except Exception as exc:  # noqa: BLE001
-        # cast: we know the production icon satisfies both Protocols
-        if hasattr(icon, "notify"):
-            _notify_error(icon, exc)  # type: ignore[arg-type]
+        _notify_error(icon, exc)
+    # Windows balloon notifications are async; if we just fired one above, it
+    # may not render before icon.stop() tears down the message pump. That's
+    # acceptable on the exit path — the user is closing the app.
     icon.stop()
