@@ -313,8 +313,8 @@ def test_start_raises_port_in_use_when_frontend_port_busy(
     with pytest.raises(process.PortInUse) as excinfo:
         orch.start(sample_project)
     assert str(sample_project.frontend.port) in str(excinfo.value)
-    # Popen was called for backend only (it failed AFTER backend was "freed"), but we
-    # want to assert NO spawns at all: the frontend check runs BEFORE any Popen.
+    # Both port checks must run before ANY Popen — the frontend-busy raise
+    # should short-circuit before the backend process is spawned.
     assert manager.started == []
 
 
