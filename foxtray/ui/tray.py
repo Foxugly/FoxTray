@@ -1,14 +1,23 @@
 """Tray UI orchestration: dataclasses, pure helpers, TrayApp integration."""
 from __future__ import annotations
 
+import logging
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+import pystray
+
 from foxtray import config as config_mod
 from foxtray import state as state_mod
-from foxtray.project import ProjectStatus
+from foxtray.project import Orchestrator, ProjectStatus
+from foxtray.ui import actions, icons
 from foxtray.ui.icons import IconState
+
+log = logging.getLogger(__name__)
+
+_POLL_INTERVAL_S = 3.0
 
 
 @dataclass(frozen=True)
@@ -210,3 +219,135 @@ def build_menu_items(
         )
     )
     return items
+
+
+class TrayApp:
+    """Integrates pystray + 3s poller on top of the pure helpers above."""
+
+    def __init__(self, cfg: config_mod.Config, orchestrator: Orchestrator) -> None:
+        self._cfg = cfg
+        self._orchestrator = orchestrator
+        self._icon: pystray.Icon | None = None
+        self._prev_active: state_mod.ActiveProject | None = None
+        self._prev_statuses: dict[str, ProjectStatus] = {
+            p.name: _zero_status(p.name) for p in cfg.projects
+        }
+        self._prev_icon_state: IconState = "stopped"
+        self._user_initiated_stop: set[str] = set()
+        self._stop_event = threading.Event()
+
+    def run(self) -> None:
+        self._icon = pystray.Icon(
+            name="FoxTray",
+            icon=icons.load("stopped"),
+            title="FoxTray",
+            menu=pystray.Menu(self._build_menu),
+        )
+        poller = threading.Thread(target=self._poll_loop, name="foxtray-poller", daemon=True)
+        poller.start()
+        try:
+            self._icon.run()
+        finally:
+            self._stop_event.set()
+            poller.join(timeout=_POLL_INTERVAL_S + 1.0)
+
+    def _poll_loop(self) -> None:
+        while not self._stop_event.is_set():
+            self._poll_tick()
+            self._stop_event.wait(_POLL_INTERVAL_S)
+
+    def _poll_tick(self) -> None:
+        if self._icon is None:
+            return
+        try:
+            curr_active = state_mod.load().active
+            curr_statuses = {
+                p.name: self._orchestrator.status(p) for p in self._cfg.projects
+            }
+        except Exception:  # noqa: BLE001 — poll loop must never die
+            log.warning("poll tick failed", exc_info=True)
+            return
+
+        suppressed = set(self._user_initiated_stop)
+        self._user_initiated_stop.clear()
+
+        for note in compute_transitions(
+            self._prev_active, self._prev_statuses,
+            curr_active, curr_statuses,
+            suppressed,
+        ):
+            self._icon.notify(note.message, title=note.title)
+
+        new_icon_state = compute_icon_state(curr_active, curr_statuses)
+        if new_icon_state != self._prev_icon_state:
+            self._icon.icon = icons.load(new_icon_state)
+            self._prev_icon_state = new_icon_state
+
+        self._prev_active = curr_active
+        self._prev_statuses = curr_statuses
+
+    def _build_menu(self) -> tuple[pystray.MenuItem, ...]:
+        if self._icon is None:
+            return ()
+        try:
+            active = state_mod.load().active
+            statuses = {
+                p.name: self._orchestrator.status(p) for p in self._cfg.projects
+            }
+        except Exception:  # noqa: BLE001
+            log.warning("menu build failed", exc_info=True)
+            return (pystray.MenuItem("FoxTray error", None, enabled=False),)
+        handlers = self._handlers()
+        specs = build_menu_items(self._cfg, active, statuses, handlers)
+        return tuple(_spec_to_pystray(s) for s in specs)
+
+    def _handlers(self) -> Handlers:
+        icon = self._icon
+        assert icon is not None
+        orch = self._orchestrator
+        user_init = self._user_initiated_stop
+
+        def _active_names() -> list[str]:
+            a = state_mod.load().active
+            return [a.name] if a is not None else []
+
+        return Handlers(
+            on_start=lambda p: actions.on_start(orch, p, icon),
+            on_stop=lambda p: actions.on_stop(orch, p, icon, user_init),
+            on_open_browser=lambda p: actions.on_open_browser(p, icon),
+            on_open_folder=lambda path: actions.on_open_folder(path, icon),
+            on_stop_all=lambda: actions.on_stop_all(orch, icon, user_init, _active_names()),
+            on_exit=lambda: actions.on_exit(icon),
+            on_stop_all_and_exit=lambda: actions.on_stop_all_and_exit(
+                orch, icon, user_init, _active_names()
+            ),
+        )
+
+
+def _zero_status(name: str) -> ProjectStatus:
+    return ProjectStatus(
+        name=name,
+        running=False,
+        backend_alive=False,
+        frontend_alive=False,
+        backend_port_listening=False,
+        frontend_port_listening=False,
+        url_ok=False,
+    )
+
+
+def _spec_to_pystray(spec: MenuItemSpec) -> pystray.MenuItem:
+    if spec.separator:
+        return pystray.Menu.SEPARATOR
+    if spec.submenu:
+        return pystray.MenuItem(
+            spec.text,
+            pystray.Menu(*(_spec_to_pystray(s) for s in spec.submenu)),
+            enabled=spec.enabled,
+        )
+    action = spec.action if spec.action is not None else (lambda: None)
+    return pystray.MenuItem(
+        spec.text,
+        lambda _icon, _item: action(),
+        enabled=spec.enabled,
+    )
