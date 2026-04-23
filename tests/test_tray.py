@@ -55,7 +55,7 @@ def test_transitions_stopped_to_running_fires_up() -> None:
     }
     curr_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     notifications = tray.compute_transitions(
-        prev_active, prev_statuses, curr_active, curr_statuses, suppressed=set()
+        prev_active, prev_statuses, curr_active, curr_statuses, suppressed=set(), pending_starts=set()
     )
     assert [n.message for n in notifications] == ["FoxRunner is up"]
 
@@ -66,7 +66,7 @@ def test_transitions_stopped_to_partial_fires_component_failure() -> None:
     prev_statuses: dict[str, ProjectStatus] = {"FoxRunner": _status()}
     curr_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=False)}
     notifications = tray.compute_transitions(
-        prev_active, prev_statuses, curr_active, curr_statuses, suppressed=set()
+        prev_active, prev_statuses, curr_active, curr_statuses, suppressed=set(), pending_starts=set()
     )
     assert len(notifications) == 1
     assert "FoxRunner" in notifications[0].message
@@ -78,7 +78,7 @@ def test_transitions_running_to_partial_names_dead_component() -> None:
     prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     curr_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=False)}
     notifications = tray.compute_transitions(
-        active, prev_statuses, active, curr_statuses, suppressed=set()
+        active, prev_statuses, active, curr_statuses, suppressed=set(), pending_starts=set()
     )
     assert len(notifications) == 1
     assert "frontend crashed" in notifications[0].message
@@ -89,7 +89,7 @@ def test_transitions_partial_to_running_fires_recovered() -> None:
     prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=False)}
     curr_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     notifications = tray.compute_transitions(
-        active, prev_statuses, active, curr_statuses, suppressed=set()
+        active, prev_statuses, active, curr_statuses, suppressed=set(), pending_starts=set()
     )
     assert [n.message for n in notifications] == ["FoxRunner recovered"]
 
@@ -99,7 +99,7 @@ def test_transitions_running_to_stopped_suppressed_is_silent() -> None:
     prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     curr_statuses: dict[str, ProjectStatus] = {"FoxRunner": _status()}
     notifications = tray.compute_transitions(
-        prev_active, prev_statuses, None, curr_statuses, suppressed={"FoxRunner"}
+        prev_active, prev_statuses, None, curr_statuses, suppressed={"FoxRunner"}, pending_starts=set()
     )
     assert notifications == []
 
@@ -109,7 +109,7 @@ def test_transitions_running_to_stopped_unsuppressed_fires_unexpected() -> None:
     prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     curr_statuses: dict[str, ProjectStatus] = {"FoxRunner": _status()}
     notifications = tray.compute_transitions(
-        prev_active, prev_statuses, None, curr_statuses, suppressed=set()
+        prev_active, prev_statuses, None, curr_statuses, suppressed=set(), pending_starts=set()
     )
     assert len(notifications) == 1
     assert "stopped unexpectedly" in notifications[0].message
@@ -120,7 +120,7 @@ def test_transitions_partial_to_stopped_suppressed_is_silent() -> None:
     prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=False)}
     curr_statuses: dict[str, ProjectStatus] = {"FoxRunner": _status()}
     notifications = tray.compute_transitions(
-        prev_active, prev_statuses, None, curr_statuses, suppressed={"FoxRunner"}
+        prev_active, prev_statuses, None, curr_statuses, suppressed={"FoxRunner"}, pending_starts=set()
     )
     assert notifications == []
 
@@ -130,7 +130,7 @@ def test_transitions_partial_to_stopped_unsuppressed_fires_fully_stopped() -> No
     prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=False)}
     curr_statuses: dict[str, ProjectStatus] = {"FoxRunner": _status()}
     notifications = tray.compute_transitions(
-        prev_active, prev_statuses, None, curr_statuses, suppressed=set()
+        prev_active, prev_statuses, None, curr_statuses, suppressed=set(), pending_starts=set()
     )
     assert len(notifications) == 1
     assert "fully stopped" in notifications[0].message
@@ -140,7 +140,7 @@ def test_transitions_no_change_returns_empty() -> None:
     active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
     statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     notifications = tray.compute_transitions(
-        active, statuses, active, statuses, suppressed=set()
+        active, statuses, active, statuses, suppressed=set(), pending_starts=set()
     )
     assert notifications == []
 
@@ -313,3 +313,70 @@ def test_icon_state_running_requires_url_ok() -> None:
         url_ok=True,
     )}
     assert tray.compute_icon_state(active, statuses) == "running"
+
+
+def test_transitions_stopped_to_partial_silent_when_pending_start() -> None:
+    prev_active = None
+    curr_active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    prev_statuses: dict[str, ProjectStatus] = {"FoxRunner": _status()}
+    curr_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True)}  # url_ok=False
+    pending = {"FoxRunner"}
+    notes = tray.compute_transitions(
+        prev_active, prev_statuses, curr_active, curr_statuses,
+        suppressed=set(), pending_starts=pending,
+    )
+    assert notes == []
+    assert pending == {"FoxRunner"}  # NOT consumed yet
+
+
+def test_transitions_partial_to_running_fires_is_up_when_pending() -> None:
+    active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    prev = {"FoxRunner": _status(backend_alive=True, frontend_alive=True)}  # url_ok=False
+    curr = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
+    pending = {"FoxRunner"}
+    notes = tray.compute_transitions(
+        active, prev, active, curr,
+        suppressed=set(), pending_starts=pending,
+    )
+    assert [n.message for n in notes] == ["FoxRunner is up"]
+    assert pending == set()  # consumed
+
+
+def test_transitions_partial_to_running_fires_recovered_when_not_pending() -> None:
+    active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    prev = {"FoxRunner": _status(backend_alive=True, frontend_alive=False)}  # crashed
+    curr = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
+    pending: set[str] = set()
+    notes = tray.compute_transitions(
+        active, prev, active, curr,
+        suppressed=set(), pending_starts=pending,
+    )
+    assert [n.message for n in notes] == ["FoxRunner recovered"]
+
+
+def test_transitions_partial_to_stopped_fires_failed_to_start_when_pending() -> None:
+    prev_active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    prev = {"FoxRunner": _status(backend_alive=True, frontend_alive=True)}  # url_ok=False (partial)
+    curr: dict[str, ProjectStatus] = {"FoxRunner": _status()}
+    pending = {"FoxRunner"}
+    notes = tray.compute_transitions(
+        prev_active, prev, None, curr,
+        suppressed=set(), pending_starts=pending,
+    )
+    assert len(notes) == 1
+    assert "failed to start" in notes[0].message
+    assert pending == set()
+
+
+def test_transitions_stopped_to_running_consumes_pending() -> None:
+    prev_active = None
+    curr_active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    prev: dict[str, ProjectStatus] = {"FoxRunner": _status()}
+    curr = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
+    pending = {"FoxRunner"}
+    notes = tray.compute_transitions(
+        prev_active, prev, curr_active, curr,
+        suppressed=set(), pending_starts=pending,
+    )
+    assert [n.message for n in notes] == ["FoxRunner is up"]
+    assert pending == set()

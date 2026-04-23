@@ -100,6 +100,7 @@ def compute_transitions(
     curr_active: state_mod.ActiveProject | None,
     curr_statuses: dict[str, ProjectStatus],
     suppressed: set[str],
+    pending_starts: set[str],
 ) -> list[Notification]:
     # Every project name that appears in either snapshot is checked.
     names = set(prev_statuses) | set(curr_statuses)
@@ -117,29 +118,39 @@ def compute_transitions(
 
         if prev_state == "stopped" and curr_state == "running":
             notifications.append(Notification("FoxTray", f"{name} is up"))
+            pending_starts.discard(name)
         elif prev_state == "stopped" and curr_state == "partial":
-            notifications.append(
-                Notification("FoxTray", f"{name} started but one component failed")
-            )
+            if name not in pending_starts:
+                notifications.append(
+                    Notification("FoxTray", f"{name} started but one component failed")
+                )
+            # else: silent — we're still booting
         elif prev_state == "running" and curr_state == "partial":
             dead = _dead_component(prev_statuses[name], curr_statuses[name])
             notifications.append(
                 Notification("FoxTray", f"⚠ {name}: {dead} crashed")
             )
         elif prev_state == "partial" and curr_state == "running":
-            notifications.append(Notification("FoxTray", f"{name} recovered"))
+            if name in pending_starts:
+                notifications.append(Notification("FoxTray", f"{name} is up"))
+                pending_starts.discard(name)
+            else:
+                notifications.append(Notification("FoxTray", f"{name} recovered"))
         elif prev_state == "running" and curr_state == "stopped":
             if name not in suppressed:
                 notifications.append(
                     Notification("FoxTray", f"⚠ {name} stopped unexpectedly")
                 )
         elif prev_state == "partial" and curr_state == "stopped":
-            if name not in suppressed:
+            if name in pending_starts:
+                notifications.append(
+                    Notification("FoxTray", f"⚠ {name} failed to start")
+                )
+                pending_starts.discard(name)
+            elif name not in suppressed:
                 notifications.append(
                     Notification("FoxTray", f"⚠ {name} fully stopped")
                 )
-        # Any other transition (e.g. stopped→stopped handled by the continue above)
-        # is silent by design.
 
     return notifications
 
