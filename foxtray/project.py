@@ -36,6 +36,12 @@ class Orchestrator:
     def __init__(self, manager: _ManagerProtocol, cfg: config.Config) -> None:
         self._manager = manager
         self._cfg = cfg
+        # Names of projects the user just asked to start but whose URL has not
+        # yet responded healthy. Written by tray menu handlers (add on click,
+        # discard on handler-level exception); read-and-discarded by the tray
+        # poller in compute_transitions. Single-operation set mutations
+        # (add/discard/in) are GIL-atomic in CPython — no lock needed because
+        # the consumer never iterates concurrently with a writer.
         self.pending_starts: set[str] = set()
 
     def _project_by_name(self, name: str) -> config.Project | None:
