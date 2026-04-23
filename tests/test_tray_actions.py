@@ -8,6 +8,24 @@ from foxtray import config
 from foxtray.ui import actions
 
 
+@dataclass
+class _FakeTaskManager:
+    runs: list[tuple[str, list[str], Path]] = field(default_factory=list)
+    raises: Exception | None = None
+    killed_count: int = 0
+
+    def run(self, key: str, command: list[str], cwd: Path) -> None:
+        if self.raises:
+            raise self.raises
+        self.runs.append((key, command, cwd))
+
+    def is_running(self, key: str) -> bool:
+        return False
+
+    def kill_all(self) -> int:
+        return self.killed_count
+
+
 def _project(name: str = "Demo") -> config.Project:
     return config.Project(
         name=name,
@@ -164,3 +182,61 @@ def test_on_stop_all_and_exit_stops_then_exits() -> None:
     assert orch.stop_all_called == 1
     assert user_initiated == {"FoxRunner"}
     assert icon.stopped is True
+
+
+def _task() -> config.Task:
+    return config.Task(
+        name="Migrate", cwd="backend", command="python manage.py migrate"
+    )
+
+
+def _script() -> config.Script:
+    return config.Script(
+        name="Git pull", path=Path("D:\\proj"), command="git pull"
+    )
+
+
+def test_on_run_task_calls_task_manager_run_with_key_command_cwd() -> None:
+    tm = _FakeTaskManager()
+    actions.on_run_task(tm, _project(), _task(), _FakeIcon())
+    assert len(tm.runs) == 1
+    key, command, cwd = tm.runs[0]
+    assert key == "task:Demo:Migrate"
+    # command: python-swap gives the venv python path
+    assert command[0].endswith("python.exe")
+    assert command[1:] == ["manage.py", "migrate"]
+    assert cwd == _project().backend.path
+
+
+def test_on_run_task_already_running_notifies() -> None:
+    import foxtray.tasks as tasks_mod
+    tm = _FakeTaskManager(raises=tasks_mod.TaskAlreadyRunning("task:Demo:Migrate"))
+    icon = _FakeIcon()
+    actions.on_run_task(tm, _project(), _task(), icon)
+    # Balloon content: "Migrate is already running" with title "FoxTray"
+    assert any("already running" in message for _title, message in icon.notifications)
+
+
+def test_on_run_task_unexpected_exception_notifies_error() -> None:
+    tm = _FakeTaskManager(raises=RuntimeError("boom"))
+    icon = _FakeIcon()
+    actions.on_run_task(tm, _project(), _task(), icon)
+    assert icon.notifications == [("FoxTray error", "boom")]
+
+
+def test_on_run_script_calls_task_manager_with_key_and_script_path() -> None:
+    tm = _FakeTaskManager()
+    actions.on_run_script(tm, _script(), _FakeIcon())
+    assert len(tm.runs) == 1
+    key, command, cwd = tm.runs[0]
+    assert key == "script:Git pull"
+    assert command == ["git", "pull"]
+    assert cwd == Path("D:\\proj")
+
+
+def test_on_run_script_already_running_notifies() -> None:
+    import foxtray.tasks as tasks_mod
+    tm = _FakeTaskManager(raises=tasks_mod.TaskAlreadyRunning("script:Git pull"))
+    icon = _FakeIcon()
+    actions.on_run_script(tm, _script(), icon)
+    assert any("already running" in message for _title, message in icon.notifications)

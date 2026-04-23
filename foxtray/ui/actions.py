@@ -7,7 +7,7 @@ import webbrowser
 from pathlib import Path
 from typing import Protocol, Sequence
 
-from foxtray import config
+from foxtray import config, tasks
 from foxtray.project import Orchestrator
 
 log = logging.getLogger(__name__)
@@ -109,3 +109,40 @@ def on_stop_all_and_exit(
     # may not render before icon.stop() tears down the message pump. That's
     # acceptable on the exit path — the user is closing the app.
     icon.stop()
+
+
+class _TaskRunnerProtocol(Protocol):
+    def run(self, key: str, command: list[str], cwd: Path) -> None: ...
+    def is_running(self, key: str) -> bool: ...
+    def kill_all(self) -> int: ...
+
+
+def on_run_task(
+    task_manager: _TaskRunnerProtocol,
+    project: config.Project,
+    task: config.Task,
+    icon: Notifier,
+) -> None:
+    key = f"task:{project.name}:{task.name}"
+    try:
+        task_manager.run(
+            key, task.resolved_command(project), task.resolved_cwd(project)
+        )
+    except tasks.TaskAlreadyRunning:
+        icon.notify(f"{task.name} is already running", title="FoxTray")
+    except Exception as exc:  # noqa: BLE001 — tray must survive any handler error
+        _notify_error(icon, exc)
+
+
+def on_run_script(
+    task_manager: _TaskRunnerProtocol,
+    script: config.Script,
+    icon: Notifier,
+) -> None:
+    key = f"script:{script.name}"
+    try:
+        task_manager.run(key, script.resolved_command(), script.path)
+    except tasks.TaskAlreadyRunning:
+        icon.notify(f"{script.name} is already running", title="FoxTray")
+    except Exception as exc:  # noqa: BLE001
+        _notify_error(icon, exc)
