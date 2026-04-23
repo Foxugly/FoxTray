@@ -7,6 +7,14 @@ from foxtray.project import ProjectStatus
 from foxtray.ui import icons, tray
 
 
+class _StubProcessManager:
+    def kill_tree(self, pid: int, timeout: float = 5.0) -> None:
+        pass
+
+    def start(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        raise RuntimeError("ProcessManager.start unused in tests")
+
+
 def _project(name: str) -> config.Project:
     return config.Project(
         name=name,
@@ -72,7 +80,7 @@ def test_poll_tick_sets_icon_to_running_and_notifies(
         next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
     )
     icon = _FakeIcon(icon=icons.load("stopped"))
-    app = tray.TrayApp(cfg, orch)  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
     app._icon = icon  # inject fake
 
     # Simulate CLI having just set state to active A
@@ -96,7 +104,7 @@ def test_poll_tick_no_notifications_on_stable_state(
         next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
     )
     icon = _FakeIcon(icon=icons.load("running"))
-    app = tray.TrayApp(cfg, orch)  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
     app._icon = icon
     state.save(state.State(active=state.ActiveProject(
         name="A", backend_pid=1, frontend_pid=2
@@ -121,7 +129,7 @@ def test_poll_tick_running_to_partial_notifies_crash(
         next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
     )
     icon = _FakeIcon(icon=icons.load("stopped"))
-    app = tray.TrayApp(cfg, orch)  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
     app._icon = icon
     state.save(state.State(active=state.ActiveProject(
         name="A", backend_pid=1, frontend_pid=2
@@ -151,7 +159,7 @@ def test_poll_tick_survives_orchestrator_exception(
 
     cfg = config.Config(projects=[_project("A")])
     icon = _FakeIcon(icon=icons.load("stopped"))
-    app = tray.TrayApp(cfg, _Broken())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, _Broken(), _StubProcessManager())  # type: ignore[arg-type]
     app._icon = icon
 
     # Must not raise.
@@ -171,7 +179,7 @@ def test_run_calls_clear_if_orphaned(
 
     cfg = config.Config(projects=[_project("A")])
     orch = _FakeOrchestrator(next_statuses={"A": _status()})
-    app = tray.TrayApp(cfg, orch)  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
 
     # We can't actually run pystray in a test. Monkeypatch pystray.Icon to a stub
     # that immediately returns from .run() so TrayApp.run() finishes.
@@ -196,7 +204,7 @@ def test_poll_tick_clears_orphan_at_end(
     # Both PIDs dead: status() returns both_alive=False, url_ok=False
     orch = _FakeOrchestrator(next_statuses={"A": _status()})
     icon = _FakeIcon(icon=icons.load("running"))  # starts as running
-    app = tray.TrayApp(cfg, orch)  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
     app._icon = icon
     # Seed prev_active so _poll_tick sees a running → stopped transition
     app._prev_active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
@@ -229,7 +237,7 @@ def test_poll_tick_passes_pending_starts_into_compute_transitions(
     )
     orch.pending_starts.add("A")
     icon = _FakeIcon(icon=icons.load("stopped"))
-    app = tray.TrayApp(cfg, orch)  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
     app._icon = icon
     state.save(state.State(active=state.ActiveProject(
         name="A", backend_pid=1, frontend_pid=2
@@ -244,3 +252,67 @@ def test_poll_tick_passes_pending_starts_into_compute_transitions(
     assert any("A is up" in n[1] for n in icon.notifications)
     # pending_starts consumed
     assert orch.pending_starts == set()
+
+
+def test_trayapp_creates_task_manager_with_kill_tree_from_process_manager(
+    tmp_appdata: Path, monkeypatch: Any
+) -> None:
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(next_statuses={"A": _status()})
+
+    class _StubProcessManager:
+        def __init__(self) -> None:
+            self.kills: list[int] = []
+
+        def kill_tree(self, pid: int, timeout: float = 5.0) -> None:
+            self.kills.append(pid)
+
+        # ProcessManager.start is not called by TaskManager construction
+        def start(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            raise RuntimeError("should not be called")
+
+    pm = _StubProcessManager()
+    app = tray.TrayApp(cfg, orch, pm)  # type: ignore[arg-type]
+    assert app._task_manager is not None
+
+
+def test_on_task_complete_fires_done_balloon_on_zero_exit(
+    tmp_appdata: Path, monkeypatch: Any
+) -> None:
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(next_statuses={"A": _status()})
+
+    class _StubProcessManager:
+        def kill_tree(self, pid: int, timeout: float = 5.0) -> None:
+            pass
+
+        def start(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            raise RuntimeError
+
+    icon = _FakeIcon(icon=None)
+    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
+    app._icon = icon  # type: ignore[assignment]
+
+    app._on_task_complete("task:A:Migrate", 0)
+    assert any(message == "Migrate done" for _t, message in icon.notifications)
+
+
+def test_on_task_complete_fires_failed_balloon_on_nonzero(
+    tmp_appdata: Path, monkeypatch: Any
+) -> None:
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(next_statuses={"A": _status()})
+
+    class _StubProcessManager:
+        def kill_tree(self, pid: int, timeout: float = 5.0) -> None:
+            pass
+
+        def start(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            raise RuntimeError
+
+    icon = _FakeIcon(icon=None)
+    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
+    app._icon = icon  # type: ignore[assignment]
+
+    app._on_task_complete("script:Git pull", 2)
+    assert any("Git pull failed" in message for _t, message in icon.notifications)

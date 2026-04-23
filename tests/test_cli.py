@@ -93,7 +93,7 @@ def test_tray_command_parses_and_dispatches(
     called: list[str] = []
 
     class _FakeTray:
-        def __init__(self, cfg, orchestrator) -> None:  # type: ignore[no-untyped-def]
+        def __init__(self, cfg, orchestrator, process_manager) -> None:  # type: ignore[no-untyped-def]
             called.append(f"init:{len(cfg.projects)}")
 
         def run(self) -> None:

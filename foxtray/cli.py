@@ -80,7 +80,9 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_tray(args: argparse.Namespace) -> int:
     cfg = config.load(args.config)
-    tray_module.TrayApp(cfg, _orchestrator(cfg)).run()
+    manager = process.ProcessManager()
+    orchestrator = project.Orchestrator(manager=manager, cfg=cfg)
+    tray_module.TrayApp(cfg, orchestrator, manager).run()
     return 0
 
 

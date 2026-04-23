@@ -10,7 +10,10 @@ from typing import Callable
 import pystray
 
 from foxtray import config as config_mod
+from foxtray import paths
 from foxtray import state as state_mod
+from foxtray import tasks
+from foxtray.process import ProcessManager
 from foxtray.project import Orchestrator, ProjectStatus
 from foxtray.ui import actions, icons
 from foxtray.ui.icons import IconState
@@ -285,7 +288,12 @@ def _script_spec(
 class TrayApp:
     """Integrates pystray + 3s poller on top of the pure helpers above."""
 
-    def __init__(self, cfg: config_mod.Config, orchestrator: Orchestrator) -> None:
+    def __init__(
+        self,
+        cfg: config_mod.Config,
+        orchestrator: Orchestrator,
+        process_manager: ProcessManager,
+    ) -> None:
         self._cfg = cfg
         self._orchestrator = orchestrator
         self._icon: pystray.Icon | None = None
@@ -296,6 +304,10 @@ class TrayApp:
         self._prev_icon_state: IconState = "stopped"
         self._user_initiated_stop: set[str] = set()
         self._stop_event = threading.Event()
+        self._task_manager = tasks.TaskManager(
+            kill_tree=process_manager.kill_tree,
+            on_complete=self._on_task_complete,
+        )
 
     def run(self) -> None:
         state_mod.clear_if_orphaned()
@@ -364,6 +376,26 @@ class TrayApp:
         except Exception:  # noqa: BLE001 — poll loop must never die
             log.warning("poll tick failed", exc_info=True)
 
+    def _on_task_complete(self, key: str, exit_code: int) -> None:
+        if self._icon is None:
+            return
+        display_name = key.rsplit(":", 1)[-1]
+        try:
+            if exit_code == 0:
+                self._icon.notify(f"{display_name} done", title="FoxTray")
+            else:
+                log_path = paths.task_log_file(key)
+                self._icon.notify(
+                    f"⚠ {display_name} failed — see {log_path}",
+                    title="FoxTray",
+                )
+        except Exception:
+            log.warning("notify after task %s completion failed", key, exc_info=True)
+        try:
+            self._icon.update_menu()
+        except Exception:
+            log.warning("update_menu after task %s failed", key, exc_info=True)
+
     def _build_menu(self) -> tuple[pystray.MenuItem, ...]:
         # pystray only calls _build_menu after icon.run() has set self._icon,
         # so no None-guard needed here. Transient errors during build fall
@@ -378,13 +410,17 @@ class TrayApp:
             log.warning("menu build failed", exc_info=True)
             return (pystray.MenuItem("FoxTray error", None, enabled=False),)
         handlers = self._handlers()
-        specs = build_menu_items(self._cfg, active, statuses, handlers)
+        specs = build_menu_items(
+            self._cfg, active, statuses, handlers,
+            running_tasks=self._task_manager.running_keys(),
+        )
         return tuple(_spec_to_pystray(s) for s in specs)
 
     def _handlers(self) -> Handlers:
         icon = self._icon
         assert icon is not None
         orch = self._orchestrator
+        tm = self._task_manager
 
         def _active_names() -> list[str]:
             a = state_mod.load().active
@@ -402,12 +438,12 @@ class TrayApp:
             on_stop_all=lambda: actions.on_stop_all(
                 orch, icon, self._user_initiated_stop, _active_names()
             ),
-            on_exit=lambda: actions.on_exit(icon),
+            on_exit=lambda: actions.on_exit(icon, tm),
             on_stop_all_and_exit=lambda: actions.on_stop_all_and_exit(
-                orch, icon, self._user_initiated_stop, _active_names()
+                orch, icon, self._user_initiated_stop, _active_names(), tm,
             ),
-            on_run_task=lambda p, t: None,  # noqa: ARG005 — wired in Task 9
-            on_run_script=lambda s: None,   # noqa: ARG005 — wired in Task 9
+            on_run_task=lambda p, t: actions.on_run_task(tm, p, t, icon),
+            on_run_script=lambda s: actions.on_run_script(tm, s, icon),
         )
 
 
