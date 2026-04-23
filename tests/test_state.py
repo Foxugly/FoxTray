@@ -24,3 +24,13 @@ def test_load_recovers_from_corrupt_file(tmp_appdata: Path) -> None:
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text("{not json", encoding="utf-8")
     assert state.load().active is None
+
+
+def test_load_recovers_from_schema_mismatch(tmp_appdata: Path) -> None:
+    state_path = tmp_appdata / "state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        '{"active": {"name": "X", "backend_pid": 1, "frontend_pid": 2, "stale_key": true}}',
+        encoding="utf-8",
+    )
+    assert state.load().active is None

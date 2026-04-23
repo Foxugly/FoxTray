@@ -29,13 +29,13 @@ def load() -> State:
         return State(active=None)
     try:
         raw: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        log.warning("state.json is unreadable; treating as empty", exc_info=True)
+        active_raw = raw.get("active")
+        if not active_raw:
+            return State(active=None)
+        return State(active=ActiveProject(**active_raw))
+    except (OSError, json.JSONDecodeError, TypeError, KeyError):
+        log.warning("state.json is unreadable or malformed; treating as empty", exc_info=True)
         return State(active=None)
-    active_raw = raw.get("active")
-    if not active_raw:
-        return State(active=None)
-    return State(active=ActiveProject(**active_raw))
 
 
 def save(state: State) -> None:
