@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -111,6 +112,24 @@ class Orchestrator:
             frontend_port_listening=health.port_listening(project.frontend.port) if frontend_alive else False,
             url_ok=health.http_ok(project.url) if (backend_alive and frontend_alive) else False,
         )
+
+    def wait_healthy(
+        self,
+        project: config.Project,
+        timeout: float = 30.0,
+        interval: float = 1.0,
+    ) -> bool:
+        """Poll self.status(project).url_ok until True or timeout elapses.
+
+        Returns the final url_ok value (True if the URL responded within the
+        window, False otherwise).
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.status(project).url_ok:
+                return True
+            time.sleep(interval)
+        return self.status(project).url_ok
 
     def _kill_pair(self, backend_pid: int, frontend_pid: int) -> None:
         self._manager.kill_tree(backend_pid)

@@ -180,3 +180,41 @@ def test_start_kills_backend_if_frontend_launch_fails(
 def test_orchestrator_pending_starts_initially_empty(sample_project: config.Project) -> None:
     orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
     assert orch.pending_starts == set()
+
+
+def test_wait_healthy_returns_true_immediately_on_url_ok(
+    tmp_appdata: Path,
+    sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Seed state so status() treats the project as active and both PIDs alive
+    state.save(state.State(active=state.ActiveProject(
+        name="Demo", backend_pid=1, frontend_pid=2
+    )))
+    monkeypatch.setattr(project.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(project.health, "http_ok", lambda url, timeout=1.0: True)
+
+    orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
+    assert orch.wait_healthy(sample_project, timeout=5.0) is True
+
+
+def test_wait_healthy_returns_false_on_timeout(
+    tmp_appdata: Path,
+    sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state.save(state.State(active=state.ActiveProject(
+        name="Demo", backend_pid=1, frontend_pid=2
+    )))
+    monkeypatch.setattr(project.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(project.health, "http_ok", lambda url, timeout=1.0: False)
+
+    # Fake clock: time jumps forward by 5s on every sleep() call.
+    clock = {"t": 0.0}
+    monkeypatch.setattr(project.time, "monotonic", lambda: clock["t"])
+    def _fake_sleep(s: float) -> None:
+        clock["t"] += s
+    monkeypatch.setattr(project.time, "sleep", _fake_sleep)
+
+    orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
+    assert orch.wait_healthy(sample_project, timeout=3.0, interval=1.0) is False
