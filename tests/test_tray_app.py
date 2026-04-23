@@ -25,7 +25,7 @@ def _project(name: str) -> config.Project:
     )
 
 
-def _status(*, backend_alive: bool = False, frontend_alive: bool = False) -> ProjectStatus:
+def _status(*, backend_alive: bool = False, frontend_alive: bool = False, url_ok: bool = False) -> ProjectStatus:
     return ProjectStatus(
         name="X",
         running=backend_alive and frontend_alive,
@@ -33,7 +33,7 @@ def _status(*, backend_alive: bool = False, frontend_alive: bool = False) -> Pro
         frontend_alive=frontend_alive,
         backend_port_listening=False,
         frontend_port_listening=False,
-        url_ok=False,
+        url_ok=url_ok,
     )
 
 
@@ -68,7 +68,7 @@ def test_poll_tick_sets_icon_to_running_and_notifies(
 ) -> None:
     cfg = config.Config(projects=[_project("A")])
     orch = _FakeOrchestrator(
-        next_statuses={"A": _status(backend_alive=True, frontend_alive=True)},
+        next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
     )
     icon = _FakeIcon(icon=icons.load("stopped"))
     app = tray.TrayApp(cfg, orch)  # type: ignore[arg-type]
@@ -90,7 +90,7 @@ def test_poll_tick_no_notifications_on_stable_state(
 ) -> None:
     cfg = config.Config(projects=[_project("A")])
     orch = _FakeOrchestrator(
-        next_statuses={"A": _status(backend_alive=True, frontend_alive=True)},
+        next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
     )
     icon = _FakeIcon(icon=icons.load("running"))
     app = tray.TrayApp(cfg, orch)  # type: ignore[arg-type]
@@ -113,7 +113,7 @@ def test_poll_tick_running_to_partial_notifies_crash(
 ) -> None:
     cfg = config.Config(projects=[_project("A")])
     orch = _FakeOrchestrator(
-        next_statuses={"A": _status(backend_alive=True, frontend_alive=True)},
+        next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
     )
     icon = _FakeIcon(icon=icons.load("stopped"))
     app = tray.TrayApp(cfg, orch)  # type: ignore[arg-type]

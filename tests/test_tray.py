@@ -7,7 +7,7 @@ from foxtray.project import ProjectStatus
 from foxtray.ui import tray
 
 
-def _status(*, backend_alive: bool = False, frontend_alive: bool = False) -> ProjectStatus:
+def _status(*, backend_alive: bool = False, frontend_alive: bool = False, url_ok: bool = False) -> ProjectStatus:
     return ProjectStatus(
         name="X",
         running=backend_alive and frontend_alive,
@@ -15,7 +15,7 @@ def _status(*, backend_alive: bool = False, frontend_alive: bool = False) -> Pro
         frontend_alive=frontend_alive,
         backend_port_listening=False,
         frontend_port_listening=False,
-        url_ok=False,
+        url_ok=url_ok,
     )
 
 
@@ -25,7 +25,7 @@ def test_icon_state_stopped_when_no_active() -> None:
 
 def test_icon_state_running_when_both_alive() -> None:
     active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
-    statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True)}
+    statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     assert tray.compute_icon_state(active, statuses) == "running"
 
 
@@ -53,7 +53,7 @@ def test_transitions_stopped_to_running_fires_up() -> None:
     prev_statuses: dict[str, ProjectStatus] = {
         "FoxRunner": _status(),
     }
-    curr_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True)}
+    curr_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     notifications = tray.compute_transitions(
         prev_active, prev_statuses, curr_active, curr_statuses, suppressed=set()
     )
@@ -75,7 +75,7 @@ def test_transitions_stopped_to_partial_fires_component_failure() -> None:
 
 def test_transitions_running_to_partial_names_dead_component() -> None:
     active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
-    prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True)}
+    prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     curr_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=False)}
     notifications = tray.compute_transitions(
         active, prev_statuses, active, curr_statuses, suppressed=set()
@@ -87,7 +87,7 @@ def test_transitions_running_to_partial_names_dead_component() -> None:
 def test_transitions_partial_to_running_fires_recovered() -> None:
     active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
     prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=False)}
-    curr_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True)}
+    curr_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     notifications = tray.compute_transitions(
         active, prev_statuses, active, curr_statuses, suppressed=set()
     )
@@ -96,7 +96,7 @@ def test_transitions_partial_to_running_fires_recovered() -> None:
 
 def test_transitions_running_to_stopped_suppressed_is_silent() -> None:
     prev_active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
-    prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True)}
+    prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     curr_statuses: dict[str, ProjectStatus] = {"FoxRunner": _status()}
     notifications = tray.compute_transitions(
         prev_active, prev_statuses, None, curr_statuses, suppressed={"FoxRunner"}
@@ -106,7 +106,7 @@ def test_transitions_running_to_stopped_suppressed_is_silent() -> None:
 
 def test_transitions_running_to_stopped_unsuppressed_fires_unexpected() -> None:
     prev_active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
-    prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True)}
+    prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     curr_statuses: dict[str, ProjectStatus] = {"FoxRunner": _status()}
     notifications = tray.compute_transitions(
         prev_active, prev_statuses, None, curr_statuses, suppressed=set()
@@ -138,7 +138,7 @@ def test_transitions_partial_to_stopped_unsuppressed_fires_fully_stopped() -> No
 
 def test_transitions_no_change_returns_empty() -> None:
     active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
-    statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True)}
+    statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     notifications = tray.compute_transitions(
         active, statuses, active, statuses, suppressed=set()
     )
@@ -194,7 +194,7 @@ def test_menu_stopped_project_shows_start() -> None:
 def test_menu_running_project_shows_stop() -> None:
     cfg = config.Config(projects=[_project("A")])
     active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
-    statuses = {"A": _status(backend_alive=True, frontend_alive=True)}
+    statuses = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     items = tray.build_menu_items(cfg, active, statuses, _noop_handlers())
     submenu_texts = [s.text for s in items[0].submenu]
     assert "Stop" in submenu_texts
@@ -211,7 +211,7 @@ def test_menu_stopped_project_disables_open_in_browser() -> None:
 def test_menu_running_project_enables_open_in_browser() -> None:
     cfg = config.Config(projects=[_project("A")])
     active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
-    statuses = {"A": _status(backend_alive=True, frontend_alive=True)}
+    statuses = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     items = tray.build_menu_items(cfg, active, statuses, _noop_handlers())
     browser_item = next(s for s in items[0].submenu if s.text == "Open in browser")
     assert browser_item.enabled is True
@@ -227,7 +227,7 @@ def test_menu_stop_all_disabled_when_no_active() -> None:
 def test_menu_stop_all_enabled_when_active() -> None:
     cfg = config.Config(projects=[_project("A")])
     active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
-    statuses = {"A": _status(backend_alive=True, frontend_alive=True)}
+    statuses = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
     items = tray.build_menu_items(cfg, active, statuses, _noop_handlers())
     stop_all = next(i for i in items if i.text == "Stop all")
     assert stop_all.enabled is True
@@ -268,9 +268,9 @@ def test_menu_project_label_reflects_status() -> None:
     cfg = config.Config(projects=[_project("A"), _project("B"), _project("C")])
     active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
     statuses = {
-        "A": _status(backend_alive=True, frontend_alive=True),   # RUNNING
-        "B": _status(backend_alive=False, frontend_alive=False), # stopped
-        "C": _status(),                                          # stopped
+        "A": _status(backend_alive=True, frontend_alive=True, url_ok=True),  # RUNNING
+        "B": _status(backend_alive=False, frontend_alive=False),              # stopped
+        "C": _status(),                                                       # stopped
     }
     items = tray.build_menu_items(cfg, active, statuses, _noop_handlers())
     labels_by_name = {i.text.split(" ")[0]: i.text for i in items if i.submenu}
@@ -285,3 +285,31 @@ def test_menu_partial_project_labelled_partial() -> None:
     statuses = {"A": _status(backend_alive=True, frontend_alive=False)}
     items = tray.build_menu_items(cfg, active, statuses, _noop_handlers())
     assert "PARTIAL" in items[0].text
+
+
+def test_icon_state_partial_when_both_alive_but_url_not_ok() -> None:
+    active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    statuses = {"FoxRunner": ProjectStatus(
+        name="FoxRunner",
+        running=True,
+        backend_alive=True,
+        frontend_alive=True,
+        backend_port_listening=True,
+        frontend_port_listening=True,
+        url_ok=False,
+    )}
+    assert tray.compute_icon_state(active, statuses) == "partial"
+
+
+def test_icon_state_running_requires_url_ok() -> None:
+    active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    statuses = {"FoxRunner": ProjectStatus(
+        name="FoxRunner",
+        running=True,
+        backend_alive=True,
+        frontend_alive=True,
+        backend_port_listening=True,
+        frontend_port_listening=True,
+        url_ok=True,
+    )}
+    assert tray.compute_icon_state(active, statuses) == "running"

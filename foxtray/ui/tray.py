@@ -50,7 +50,7 @@ class Handlers:
 
 
 def _status_to_icon_state(status: ProjectStatus) -> IconState:
-    if status.backend_alive and status.frontend_alive:
+    if status.backend_alive and status.frontend_alive and status.url_ok:
         return "running"
     if status.backend_alive or status.frontend_alive:
         return "partial"
