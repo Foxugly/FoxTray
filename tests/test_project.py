@@ -29,6 +29,10 @@ class _FakeManager:
         self.killed.append(pid)
 
 
+def _cfg_with(project: config.Project) -> config.Config:
+    return config.Config(projects=[project])
+
+
 @pytest.fixture
 def sample_project(tmp_path: Path) -> config.Project:
     return config.Project(
@@ -45,7 +49,7 @@ def sample_project(tmp_path: Path) -> config.Project:
 
 def test_start_records_pids_in_state(tmp_appdata: Path, sample_project: config.Project) -> None:
     manager = _FakeManager()
-    orchestrator = project.Orchestrator(manager=manager)
+    orchestrator = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
 
     orchestrator.start(sample_project)
 
@@ -68,7 +72,7 @@ def test_start_stops_existing_active_first(
 ) -> None:
     state.save(state.State(active=state.ActiveProject(name="Prev", backend_pid=11, frontend_pid=22)))
     manager = _FakeManager()
-    orchestrator = project.Orchestrator(manager=manager)
+    orchestrator = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
 
     orchestrator.start(sample_project)
 
@@ -89,7 +93,7 @@ def test_stop_clears_state_and_kills_tree(
 ) -> None:
     state.save(state.State(active=state.ActiveProject(name="Demo", backend_pid=77, frontend_pid=88)))
     manager = _FakeManager()
-    orchestrator = project.Orchestrator(manager=manager)
+    orchestrator = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
 
     orchestrator.stop("Demo")
 
@@ -97,9 +101,9 @@ def test_stop_clears_state_and_kills_tree(
     assert state.load().active is None
 
 
-def test_stop_noop_when_not_active(tmp_appdata: Path) -> None:
+def test_stop_noop_when_not_active(tmp_appdata: Path, sample_project: config.Project) -> None:
     manager = _FakeManager()
-    orchestrator = project.Orchestrator(manager=manager)
+    orchestrator = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
 
     orchestrator.stop("Demo")
 
@@ -108,7 +112,7 @@ def test_stop_noop_when_not_active(tmp_appdata: Path) -> None:
 
 
 def test_status_is_stopped_when_state_empty(sample_project: config.Project, tmp_appdata: Path) -> None:
-    status = project.Orchestrator(manager=_FakeManager()).status(sample_project)
+    status = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project)).status(sample_project)
     assert status.running is False
     assert status.backend_alive is False
     assert status.frontend_alive is False
@@ -129,7 +133,7 @@ def test_status_alive_when_pids_exist(
                 )
             )
         )
-        status = project.Orchestrator(manager=_FakeManager()).status(sample_project)
+        status = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project)).status(sample_project)
         assert status.running is True
         assert status.backend_alive is True
         assert status.frontend_alive is True
@@ -164,10 +168,15 @@ def test_start_kills_backend_if_frontend_launch_fails(
                 pass
 
     manager = _BrokenFrontendManager()
-    orchestrator = project.Orchestrator(manager=manager)
+    orchestrator = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
 
     with pytest.raises(RuntimeError, match="frontend start exploded"):
         orchestrator.start(sample_project)
 
     assert len(manager.killed) == 1, "backend should have been killed when frontend failed"
     assert state.load().active is None, "state should not record a partial start"
+
+
+def test_orchestrator_pending_starts_initially_empty(sample_project: config.Project) -> None:
+    orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
+    assert orch.pending_starts == set()

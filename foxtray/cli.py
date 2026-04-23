@@ -14,13 +14,13 @@ log = logging.getLogger(__name__)
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 
 
-def _orchestrator() -> project.Orchestrator:
-    return project.Orchestrator(manager=process.ProcessManager())
+def _orchestrator(cfg: config.Config) -> project.Orchestrator:
+    return project.Orchestrator(manager=process.ProcessManager(), cfg=cfg)
 
 
 def cmd_list(args: argparse.Namespace) -> int:
     cfg = config.load(args.config)
-    orchestrator = _orchestrator()
+    orchestrator = _orchestrator(cfg)
     for proj in cfg.projects:
         status = orchestrator.status(proj)
         label = "RUNNING" if status.running else "stopped"
@@ -31,15 +31,16 @@ def cmd_list(args: argparse.Namespace) -> int:
 def cmd_start(args: argparse.Namespace) -> int:
     cfg = config.load(args.config)
     proj = cfg.get(args.name)
-    _orchestrator().start(proj)
+    _orchestrator(cfg).start(proj)
     print(f"Started {proj.name}")
     return 0
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
-    config.load(args.config).get(args.name)  # validates name exists
+    cfg = config.load(args.config)
+    cfg.get(args.name)  # validates name exists
     was_active = state.load().active is not None and state.load().active.name == args.name
-    _orchestrator().stop(args.name)
+    _orchestrator(cfg).stop(args.name)
     if was_active:
         print(f"Stopped {args.name}")
     else:
@@ -48,7 +49,8 @@ def cmd_stop(args: argparse.Namespace) -> int:
 
 
 def cmd_stop_all(args: argparse.Namespace) -> int:
-    _orchestrator().stop_all()
+    cfg = config.load(args.config)
+    _orchestrator(cfg).stop_all()
     print("Stopped all")
     return 0
 
@@ -56,7 +58,7 @@ def cmd_stop_all(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     cfg = config.load(args.config)
     proj = cfg.get(args.name)
-    status = _orchestrator().status(proj)
+    status = _orchestrator(cfg).status(proj)
     print(f"name:               {status.name}")
     print(f"running:            {status.running}")
     print(f"backend alive:      {status.backend_alive}")
@@ -69,7 +71,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_tray(args: argparse.Namespace) -> int:
     cfg = config.load(args.config)
-    tray_module.TrayApp(cfg, _orchestrator()).run()
+    tray_module.TrayApp(cfg, _orchestrator(cfg)).run()
     return 0
 
 

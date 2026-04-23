@@ -33,8 +33,16 @@ class ProjectStatus:
 
 
 class Orchestrator:
-    def __init__(self, manager: _ManagerProtocol) -> None:
+    def __init__(self, manager: _ManagerProtocol, cfg: config.Config) -> None:
         self._manager = manager
+        self._cfg = cfg
+        self.pending_starts: set[str] = set()
+
+    def _project_by_name(self, name: str) -> config.Project | None:
+        for p in self._cfg.projects:
+            if p.name == name:
+                return p
+        return None
 
     def start(self, project: config.Project) -> None:
         current = state.load().active
