@@ -14,6 +14,10 @@ from foxtray import logs
 class ExecutableNotFound(FileNotFoundError):
     """Raised when the first token of a command cannot be resolved on PATH."""
 
+
+class PortInUse(RuntimeError):
+    """Raised by Orchestrator.start when a required port is still occupied."""
+
 log = logging.getLogger(__name__)
 
 # On Windows CREATE_NEW_PROCESS_GROUP lets the child detach from our Ctrl+C

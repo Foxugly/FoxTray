@@ -130,3 +130,10 @@ def test_start_rotates_previous_log(
     popen.wait(timeout=5.0)
 
     assert (logs_dir / "UnitTest_backend.log.1").read_text(encoding="utf-8") == "OLD"
+
+
+def test_port_in_use_is_a_runtime_error() -> None:
+    from foxtray.process import PortInUse
+    exc = PortInUse("port 8000 still in use")
+    assert isinstance(exc, RuntimeError)
+    assert "8000" in str(exc)
