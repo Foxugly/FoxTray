@@ -54,3 +54,75 @@ def compute_icon_state(
     if status.backend_alive or status.frontend_alive:
         return "partial"
     return "stopped"
+
+
+def _project_icon_state(
+    name: str,
+    active: state_mod.ActiveProject | None,
+    status: ProjectStatus | None,
+) -> IconState:
+    if active is None or active.name != name or status is None:
+        return "stopped"
+    if status.backend_alive and status.frontend_alive:
+        return "running"
+    if status.backend_alive or status.frontend_alive:
+        return "partial"
+    return "stopped"
+
+
+def _dead_component(prev: ProjectStatus, curr: ProjectStatus) -> str:
+    if prev.backend_alive and not curr.backend_alive:
+        return "backend"
+    if prev.frontend_alive and not curr.frontend_alive:
+        return "frontend"
+    return "unknown"
+
+
+def compute_transitions(
+    prev_active: state_mod.ActiveProject | None,
+    prev_statuses: dict[str, ProjectStatus],
+    curr_active: state_mod.ActiveProject | None,
+    curr_statuses: dict[str, ProjectStatus],
+    suppressed: set[str],
+) -> list[Notification]:
+    # Every project name that appears in either snapshot is checked.
+    names = set(prev_statuses) | set(curr_statuses)
+    if prev_active is not None:
+        names.add(prev_active.name)
+    if curr_active is not None:
+        names.add(curr_active.name)
+
+    notifications: list[Notification] = []
+    for name in sorted(names):
+        prev_state = _project_icon_state(name, prev_active, prev_statuses.get(name))
+        curr_state = _project_icon_state(name, curr_active, curr_statuses.get(name))
+        if prev_state == curr_state:
+            continue
+
+        if prev_state == "stopped" and curr_state == "running":
+            notifications.append(Notification("FoxTray", f"{name} is up"))
+        elif prev_state == "stopped" and curr_state == "partial":
+            notifications.append(
+                Notification("FoxTray", f"{name} started but one component failed")
+            )
+        elif prev_state == "running" and curr_state == "partial":
+            dead = _dead_component(prev_statuses[name], curr_statuses[name])
+            notifications.append(
+                Notification("FoxTray", f"⚠ {name}: {dead} crashed")
+            )
+        elif prev_state == "partial" and curr_state == "running":
+            notifications.append(Notification("FoxTray", f"{name} recovered"))
+        elif prev_state == "running" and curr_state == "stopped":
+            if name not in suppressed:
+                notifications.append(
+                    Notification("FoxTray", f"⚠ {name} stopped unexpectedly")
+                )
+        elif prev_state == "partial" and curr_state == "stopped":
+            if name not in suppressed:
+                notifications.append(
+                    Notification("FoxTray", f"⚠ {name} fully stopped")
+                )
+        # Any other transition (e.g. stopped→stopped handled by the continue above)
+        # is silent by design.
+
+    return notifications
