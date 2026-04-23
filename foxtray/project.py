@@ -90,6 +90,19 @@ class Orchestrator:
             return
         self._kill_pair(current.backend_pid, current.frontend_pid)
         state.clear()
+        cfg_project = self._project_by_name(name)
+        if cfg_project is None:
+            return
+        if not health.wait_port_free(cfg_project.backend.port, timeout=10.0):
+            log.warning(
+                "stop: backend port %s still listening after timeout",
+                cfg_project.backend.port,
+            )
+        if not health.wait_port_free(cfg_project.frontend.port, timeout=10.0):
+            log.warning(
+                "stop: frontend port %s still listening after timeout",
+                cfg_project.frontend.port,
+            )
 
     def stop_all(self) -> None:
         current = state.load().active

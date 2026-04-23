@@ -218,3 +218,64 @@ def test_wait_healthy_returns_false_on_timeout(
 
     orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
     assert orch.wait_healthy(sample_project, timeout=3.0, interval=1.0) is False
+
+
+def test_stop_waits_for_port_free_on_both_ports(
+    tmp_appdata: Path,
+    sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state.save(state.State(active=state.ActiveProject(
+        name="Demo", backend_pid=1, frontend_pid=2
+    )))
+    called: list[tuple[int, float]] = []
+    def _fake_wait(port: int, timeout: float = 10.0, interval: float = 0.2) -> bool:
+        called.append((port, timeout))
+        return True
+    monkeypatch.setattr(project.health, "wait_port_free", _fake_wait)
+
+    manager = _FakeManager()
+    orch = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
+    orch.stop("Demo")
+
+    # Both backend and frontend ports should have been waited on with the 10s timeout
+    assert (sample_project.backend.port, 10.0) in called
+    assert (sample_project.frontend.port, 10.0) in called
+
+
+def test_stop_logs_warning_when_port_stays_busy(
+    tmp_appdata: Path,
+    sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    state.save(state.State(active=state.ActiveProject(
+        name="Demo", backend_pid=1, frontend_pid=2
+    )))
+    monkeypatch.setattr(project.health, "wait_port_free", lambda port, **_: False)
+
+    manager = _FakeManager()
+    orch = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
+    with caplog.at_level("WARNING", logger="foxtray.project"):
+        orch.stop("Demo")
+
+    messages = [r.message for r in caplog.records]
+    assert any("still listening" in m for m in messages)
+
+
+def test_stop_skips_port_wait_for_unknown_project(
+    tmp_appdata: Path,
+    sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # state.json.active.name doesn't match any project in cfg; stop should early-return
+    # and never touch wait_port_free.
+    called: list[int] = []
+    def _fake_wait(port: int, **_):
+        called.append(port)
+        return True
+    monkeypatch.setattr(project.health, "wait_port_free", _fake_wait)
+
+    orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
+    orch.stop("NotInConfig")  # state.active is None anyway
+    assert called == []
