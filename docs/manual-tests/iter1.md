@@ -45,7 +45,28 @@ Run from `D:\PycharmProjects\FoxTray` with the project venv activated.
 - No crash detection: if Django/Angular die unexpectedly, `list` will show `stopped` (via `psutil.pid_exists`) but the stale state.json lingers until the next `start` or `stop-all`.
 - QuizOnline's venv layout isn't set up yet on this machine; skip scenarios that require it.
 
-## Issues observed
-<!-- Fill in during test run. Link to fix commits. -->
+## Run log — 2026-04-23
 
-_None yet._
+**Result:** PASS (kill-tree verified on a real Django process tree).
+
+### Observations
+
+- `start FoxRunner` returned exit 0 and wrote `{"active": {"name":"FoxRunner", "backend_pid":39400, "frontend_pid":44768}}` to `state.json`.
+- **Backend (Django `runserver 8000`)** booted cleanly. Captured a real 4-PID tree: root `39400` + 3 `python.exe` descendants spawned by Django's `StatReloader`.
+- **Frontend (Angular)** crashed seconds after start with `An unhandled exception occurred: Port 4200 is already in use.` — another non-FoxTray node.exe on the machine had grabbed 4200 between baseline check and start. FoxTray did NOT detect the frontend crash (confirms the documented "no health-check wait" limitation).
+- `stop FoxRunner` returned in **0.4 s**. All 4 backend-tree PIDs were dead, port 8000 was free, port 4200 was free, `state.json.active == null`.
+- `list` and `status` output matched spec.
+
+### Bug caught (fixed before running)
+
+- **`subprocess.Popen(['ng', ...], shell=False)` does NOT honor Windows PATHEXT** — Popen looked for literal `ng` and raised `FileNotFoundError`, because the real file is `ng.CMD`. Fixed in commit `b96b433` by resolving the first token through `shutil.which()` inside `ProcessManager.start`, and by introducing `process.ExecutableNotFound` so the CLI surfaces a clearer message than the generic "Cannot open config". Regression tests added to `tests/test_process.py`.
+- All existing tests had used `sys.executable` (a full `.exe` path), which masked the scenario. Added `test_start_resolves_bare_executable_name` and `test_start_raises_executable_not_found_for_missing_bin`.
+
+### Items intentionally deferred (known Iter 1 limitations, already documented)
+
+- `start FoxRunner` reported success even though frontend crashed ~seconds later — no health-check-on-start wait yet. Iter 3 will add it.
+- No `wait_port_free` call before the next `start` — switch test (`start X` while Y is running) can still race on rapid toggle. Iter 3.
+
+### Switch test & `stop-all`
+
+Not executed because the only externally-available frontend port (4200) was occupied by another tenant on this machine. Iter 3 integration test will use a fresh machine or reserved ports.
