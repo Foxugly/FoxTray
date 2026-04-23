@@ -68,6 +68,36 @@ def test_start_returns_popen_and_writes_log(
     assert "hello" in log_path.read_text(encoding="utf-8")
 
 
+def test_start_resolves_bare_executable_name(
+    manager: process.ProcessManager, tmp_appdata: Path
+) -> None:
+    """Regression: on Windows Popen(['ng', ...]) fails — _resolve_command must find ng.CMD.
+
+    We use 'python' (no extension) which is guaranteed on PATH wherever this test runs.
+    The plain 'python' string would fail inside Popen on Windows the same way 'ng' did.
+    """
+    popen = manager.start(
+        project="UnitTest",
+        component="backend",
+        command=["python", "-c", "pass"],
+        cwd=Path.cwd(),
+    )
+    popen.wait(timeout=5.0)
+    assert popen.returncode == 0
+
+
+def test_start_raises_executable_not_found_for_missing_bin(
+    manager: process.ProcessManager, tmp_appdata: Path
+) -> None:
+    with pytest.raises(process.ExecutableNotFound, match="not-a-real-binary-xyzzy"):
+        manager.start(
+            project="UnitTest",
+            component="backend",
+            command=["not-a-real-binary-xyzzy", "--help"],
+            cwd=Path.cwd(),
+        )
+
+
 def test_start_rotates_previous_log(
     manager: process.ProcessManager, tmp_appdata: Path
 ) -> None:

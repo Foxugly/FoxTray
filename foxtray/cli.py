@@ -103,6 +103,9 @@ def main(argv: list[str] | None = None) -> int:
     except config.ConfigError as exc:
         print(f"Config error: {exc}", file=sys.stderr)
         return 2
+    except process.ExecutableNotFound as exc:
+        print(f"Cannot launch subprocess: {exc}", file=sys.stderr)
+        return 2
     except OSError as exc:
         print(f"Cannot open config: {exc}", file=sys.stderr)
         return 2
