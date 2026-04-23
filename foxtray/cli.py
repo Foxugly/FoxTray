@@ -6,7 +6,7 @@ import logging
 import sys
 from pathlib import Path
 
-from foxtray import config, process, project
+from foxtray import config, process, project, state
 
 log = logging.getLogger(__name__)
 
@@ -37,8 +37,12 @@ def cmd_start(args: argparse.Namespace) -> int:
 
 def cmd_stop(args: argparse.Namespace) -> int:
     config.load(args.config).get(args.name)  # validates name exists
+    was_active = state.load().active is not None and state.load().active.name == args.name
     _orchestrator().stop(args.name)
-    print(f"Stopped {args.name}")
+    if was_active:
+        print(f"Stopped {args.name}")
+    else:
+        print(f"{args.name} was not active; nothing to stop")
     return 0
 
 

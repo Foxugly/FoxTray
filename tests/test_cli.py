@@ -75,3 +75,13 @@ def test_unrelated_keyerror_is_not_swallowed(
     monkeypatch.setattr(cli.config, "load", _load_raising_bare_keyerror)
     with pytest.raises(KeyError, match="not-a-project-name"):
         cli.main(["--config", str(demo_config), "list"])
+
+
+def test_stop_reports_noop_when_not_active(
+    demo_config: Path, tmp_appdata: Path, capsys: pytest.CaptureFixture
+) -> None:
+    rc = cli.main(["--config", str(demo_config), "stop", "Demo"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "was not active" in out
+    assert "Stopped Demo" not in out

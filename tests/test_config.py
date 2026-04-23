@@ -57,7 +57,7 @@ def test_frontend_resolved_command_is_shell_split(tmp_path: Path) -> None:
 def test_project_registry_lookup(tmp_path: Path) -> None:
     cfg = config.load(write_config(tmp_path, SAMPLE_YAML))
     assert cfg.get("FoxRunner").name == "FoxRunner"
-    with pytest.raises(KeyError):
+    with pytest.raises(config.ProjectNotFound):
         cfg.get("Nope")
 
 

@@ -30,6 +30,9 @@ class Backend:
 
     @property
     def resolved_command(self) -> list[str]:
+        # posix=True is safe here: commands never contain Windows paths (those live in
+        # path/venv fields). Default posix mode strips quote characters from tokens,
+        # which is what we want before handing the list to subprocess.Popen.
         parts = shlex.split(self.command)
         if not parts:
             raise ConfigError("backend.command is empty")
@@ -46,6 +49,7 @@ class Frontend:
 
     @property
     def resolved_command(self) -> list[str]:
+        # See Backend.resolved_command for why posix=True is correct here.
         return shlex.split(self.command)
 
 

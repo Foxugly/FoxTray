@@ -72,7 +72,16 @@ def test_start_stops_existing_active_first(
 
     orchestrator.start(sample_project)
 
-    assert 11 in manager.killed and 22 in manager.killed
+    try:
+        assert 11 in manager.killed and 22 in manager.killed
+    finally:
+        active = state.load().active
+        if active is not None:
+            for pid in (active.backend_pid, active.frontend_pid):
+                try:
+                    psutil.Process(pid).kill()
+                except psutil.NoSuchProcess:
+                    pass
 
 
 def test_stop_clears_state_and_kills_tree(
