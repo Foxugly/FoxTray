@@ -88,6 +88,12 @@ def on_stop_all(
         _notify_error(icon, exc)
 
 
+class _TaskRunnerProtocol(Protocol):
+    def run(self, key: str, command: list[str], cwd: Path) -> None: ...
+    def is_running(self, key: str) -> bool: ...
+    def kill_all(self) -> int: ...
+
+
 def on_exit(icon: Closable, task_manager: _TaskRunnerProtocol) -> None:
     killed = task_manager.kill_all()
     if killed > 0:
@@ -119,12 +125,6 @@ def on_stop_all_and_exit(
         except Exception:  # noqa: BLE001
             pass
     icon.stop()
-
-
-class _TaskRunnerProtocol(Protocol):
-    def run(self, key: str, command: list[str], cwd: Path) -> None: ...
-    def is_running(self, key: str) -> bool: ...
-    def kill_all(self) -> int: ...
 
 
 def on_run_task(

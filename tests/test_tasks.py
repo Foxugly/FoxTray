@@ -39,20 +39,6 @@ def _collect_completions(expected: int, timeout: float = 5.0):
     return _cb, done, completions
 
 
-def _collect_completions(expected: int, timeout: float = 5.0):
-    """Return (callback, done_event, completions_list). done_event fires when
-    `expected` completions have been recorded."""
-    done = threading.Event()
-    completions: list[tuple[str, int]] = []
-
-    def _cb(key: str, exit_code: int) -> None:
-        completions.append((key, exit_code))
-        if len(completions) >= expected:
-            done.set()
-
-    return _cb, done, completions
-
-
 def test_run_spawns_and_registers(tmp_appdata: Path, tmp_path: Path) -> None:
     kills: list[int] = []
     cb, done, completions = _collect_completions(1)
