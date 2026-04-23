@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import json
 import logging
-
-import psutil
 from dataclasses import asdict, dataclass
 from typing import Any
+
+import psutil
 
 from foxtray import paths
 
