@@ -259,35 +259,38 @@ class TrayApp:
     def _poll_tick(self) -> None:
         if self._icon is None:
             return
+        # Single guard around the ENTIRE tick body: reading state, calling the
+        # orchestrator, AND the pystray mutations (notify / icon.icon) can all
+        # raise. Any uncaught exception here would kill the daemon thread
+        # silently, freezing the icon.
         try:
             curr_active = state_mod.load().active
             curr_statuses = {
                 p.name: self._orchestrator.status(p) for p in self._cfg.projects
             }
+
+            # Atomic swap: any handler calling .add(name) on the old set before
+            # we reassign goes into `suppressed`; any add after the reassign
+            # goes into the fresh set and survives to the next tick.
+            suppressed = self._user_initiated_stop
+            self._user_initiated_stop = set()
+
+            for note in compute_transitions(
+                self._prev_active, self._prev_statuses,
+                curr_active, curr_statuses,
+                suppressed,
+            ):
+                self._icon.notify(note.message, title=note.title)
+
+            new_icon_state = compute_icon_state(curr_active, curr_statuses)
+            if new_icon_state != self._prev_icon_state:
+                self._icon.icon = icons.load(new_icon_state)
+                self._prev_icon_state = new_icon_state
+
+            self._prev_active = curr_active
+            self._prev_statuses = curr_statuses
         except Exception:  # noqa: BLE001 — poll loop must never die
             log.warning("poll tick failed", exc_info=True)
-            return
-
-        # Atomic swap: any handler calling .add(name) on the old set before we
-        # reassign goes into `suppressed`; any add after the reassign goes into
-        # the fresh set and survives to the next tick. Safe without a lock.
-        suppressed = self._user_initiated_stop
-        self._user_initiated_stop = set()
-
-        for note in compute_transitions(
-            self._prev_active, self._prev_statuses,
-            curr_active, curr_statuses,
-            suppressed,
-        ):
-            self._icon.notify(note.message, title=note.title)
-
-        new_icon_state = compute_icon_state(curr_active, curr_statuses)
-        if new_icon_state != self._prev_icon_state:
-            self._icon.icon = icons.load(new_icon_state)
-            self._prev_icon_state = new_icon_state
-
-        self._prev_active = curr_active
-        self._prev_statuses = curr_statuses
 
     def _build_menu(self) -> tuple[pystray.MenuItem, ...]:
         # pystray only calls _build_menu after icon.run() has set self._icon,
@@ -310,21 +313,26 @@ class TrayApp:
         icon = self._icon
         assert icon is not None
         orch = self._orchestrator
-        user_init = self._user_initiated_stop
 
         def _active_names() -> list[str]:
             a = state_mod.load().active
             return [a.name] if a is not None else []
 
+        # Lambdas read self._user_initiated_stop at click time, not menu-open
+        # time. _poll_tick may atomically swap the set between menu-open and
+        # click; capturing the old reference would silently drop the user's
+        # stop-intent flag.
         return Handlers(
             on_start=lambda p: actions.on_start(orch, p, icon),
-            on_stop=lambda p: actions.on_stop(orch, p, icon, user_init),
+            on_stop=lambda p: actions.on_stop(orch, p, icon, self._user_initiated_stop),
             on_open_browser=lambda p: actions.on_open_browser(p, icon),
             on_open_folder=lambda path: actions.on_open_folder(path, icon),
-            on_stop_all=lambda: actions.on_stop_all(orch, icon, user_init, _active_names()),
+            on_stop_all=lambda: actions.on_stop_all(
+                orch, icon, self._user_initiated_stop, _active_names()
+            ),
             on_exit=lambda: actions.on_exit(icon),
             on_stop_all_and_exit=lambda: actions.on_stop_all_and_exit(
-                orch, icon, user_init, _active_names()
+                orch, icon, self._user_initiated_stop, _active_names()
             ),
         )
 

@@ -115,6 +115,27 @@ def test_transitions_running_to_stopped_unsuppressed_fires_unexpected() -> None:
     assert "stopped unexpectedly" in notifications[0].message
 
 
+def test_transitions_partial_to_stopped_suppressed_is_silent() -> None:
+    prev_active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=False)}
+    curr_statuses: dict[str, ProjectStatus] = {"FoxRunner": _status()}
+    notifications = tray.compute_transitions(
+        prev_active, prev_statuses, None, curr_statuses, suppressed={"FoxRunner"}
+    )
+    assert notifications == []
+
+
+def test_transitions_partial_to_stopped_unsuppressed_fires_fully_stopped() -> None:
+    prev_active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    prev_statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=False)}
+    curr_statuses: dict[str, ProjectStatus] = {"FoxRunner": _status()}
+    notifications = tray.compute_transitions(
+        prev_active, prev_statuses, None, curr_statuses, suppressed=set()
+    )
+    assert len(notifications) == 1
+    assert "fully stopped" in notifications[0].message
+
+
 def test_transitions_no_change_returns_empty() -> None:
     active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
     statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True)}
