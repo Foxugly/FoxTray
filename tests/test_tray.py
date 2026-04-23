@@ -172,20 +172,22 @@ def _noop_handlers() -> tray.Handlers:
         on_stop_all=lambda: None,
         on_exit=lambda: None,
         on_stop_all_and_exit=lambda: None,
+        on_run_task=lambda p, t: None,
+        on_run_script=lambda s: None,
     )
 
 
 def test_menu_lists_all_projects_in_config_order() -> None:
     cfg = config.Config(projects=[_project("A"), _project("B"), _project("C")])
     statuses = {"A": _status(), "B": _status(), "C": _status()}
-    items = tray.build_menu_items(cfg, None, statuses, _noop_handlers())
+    items = tray.build_menu_items(cfg, None, statuses, _noop_handlers(), running_tasks=set())
     project_items = [i for i in items if not i.separator and i.submenu]
     assert [i.text.split(" ")[0] for i in project_items] == ["A", "B", "C"]
 
 
 def test_menu_stopped_project_shows_start() -> None:
     cfg = config.Config(projects=[_project("A")])
-    items = tray.build_menu_items(cfg, None, {"A": _status()}, _noop_handlers())
+    items = tray.build_menu_items(cfg, None, {"A": _status()}, _noop_handlers(), running_tasks=set())
     submenu_texts = [s.text for s in items[0].submenu]
     assert "Start" in submenu_texts
     assert "Stop" not in submenu_texts
@@ -195,7 +197,7 @@ def test_menu_running_project_shows_stop() -> None:
     cfg = config.Config(projects=[_project("A")])
     active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
     statuses = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
-    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers())
+    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers(), running_tasks=set())
     submenu_texts = [s.text for s in items[0].submenu]
     assert "Stop" in submenu_texts
     assert "Start" not in submenu_texts
@@ -203,7 +205,7 @@ def test_menu_running_project_shows_stop() -> None:
 
 def test_menu_stopped_project_disables_open_in_browser() -> None:
     cfg = config.Config(projects=[_project("A")])
-    items = tray.build_menu_items(cfg, None, {"A": _status()}, _noop_handlers())
+    items = tray.build_menu_items(cfg, None, {"A": _status()}, _noop_handlers(), running_tasks=set())
     browser_item = next(s for s in items[0].submenu if s.text == "Open in browser")
     assert browser_item.enabled is False
 
@@ -212,14 +214,14 @@ def test_menu_running_project_enables_open_in_browser() -> None:
     cfg = config.Config(projects=[_project("A")])
     active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
     statuses = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
-    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers())
+    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers(), running_tasks=set())
     browser_item = next(s for s in items[0].submenu if s.text == "Open in browser")
     assert browser_item.enabled is True
 
 
 def test_menu_stop_all_disabled_when_no_active() -> None:
     cfg = config.Config(projects=[_project("A")])
-    items = tray.build_menu_items(cfg, None, {"A": _status()}, _noop_handlers())
+    items = tray.build_menu_items(cfg, None, {"A": _status()}, _noop_handlers(), running_tasks=set())
     stop_all = next(i for i in items if i.text == "Stop all")
     assert stop_all.enabled is False
 
@@ -228,14 +230,14 @@ def test_menu_stop_all_enabled_when_active() -> None:
     cfg = config.Config(projects=[_project("A")])
     active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
     statuses = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
-    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers())
+    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers(), running_tasks=set())
     stop_all = next(i for i in items if i.text == "Stop all")
     assert stop_all.enabled is True
 
 
 def test_menu_has_exit_and_stop_all_and_exit() -> None:
     cfg = config.Config(projects=[_project("A")])
-    items = tray.build_menu_items(cfg, None, {"A": _status()}, _noop_handlers())
+    items = tray.build_menu_items(cfg, None, {"A": _status()}, _noop_handlers(), running_tasks=set())
     texts = [i.text for i in items if not i.separator]
     assert "Exit" in texts
     assert "Stop all and exit" in texts
@@ -247,7 +249,7 @@ def test_menu_partial_project_shows_stop() -> None:
     cfg = config.Config(projects=[_project("A")])
     active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
     statuses = {"A": _status(backend_alive=True, frontend_alive=False)}
-    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers())
+    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers(), running_tasks=set())
     submenu_texts = [s.text for s in items[0].submenu]
     assert "Stop" in submenu_texts
     assert "Start" not in submenu_texts
@@ -272,7 +274,7 @@ def test_menu_project_label_reflects_status() -> None:
         "B": _status(backend_alive=False, frontend_alive=False),              # stopped
         "C": _status(),                                                       # stopped
     }
-    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers())
+    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers(), running_tasks=set())
     labels_by_name = {i.text.split(" ")[0]: i.text for i in items if i.submenu}
     assert "RUNNING" in labels_by_name["A"]
     assert "stopped" in labels_by_name["B"]
@@ -283,7 +285,7 @@ def test_menu_partial_project_labelled_partial() -> None:
     cfg = config.Config(projects=[_project("A")])
     active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
     statuses = {"A": _status(backend_alive=True, frontend_alive=False)}
-    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers())
+    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers(), running_tasks=set())
     assert "PARTIAL" in items[0].text
 
 
@@ -380,3 +382,125 @@ def test_transitions_stopped_to_running_consumes_pending() -> None:
     )
     assert [n.message for n in notes] == ["FoxRunner is up"]
     assert pending == set()
+
+
+def _project_with_tasks(name: str = "A") -> config.Project:
+    base = _project(name)
+    return config.Project(
+        name=base.name,
+        url=base.url,
+        backend=base.backend,
+        frontend=base.frontend,
+        start_timeout=base.start_timeout,
+        tasks=(
+            config.Task(name="Migrate", cwd="backend", command="python manage.py migrate"),
+            config.Task(name="NG test", cwd="frontend", command="ng test --watch=false"),
+        ),
+    )
+
+
+def _noop_handlers_with_tasks() -> tray.Handlers:
+    return tray.Handlers(
+        on_start=lambda p: None,
+        on_stop=lambda p: None,
+        on_open_browser=lambda p: None,
+        on_open_folder=lambda path: None,
+        on_stop_all=lambda: None,
+        on_exit=lambda: None,
+        on_stop_all_and_exit=lambda: None,
+        on_run_task=lambda p, t: None,
+        on_run_script=lambda s: None,
+    )
+
+
+def test_menu_project_without_tasks_has_no_tasks_submenu() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers_with_tasks(),
+        running_tasks=set(),
+    )
+    submenu_texts = [s.text for s in items[0].submenu]
+    assert "Tasks" not in submenu_texts
+
+
+def test_menu_project_with_tasks_adds_tasks_submenu() -> None:
+    cfg = config.Config(projects=[_project_with_tasks("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers_with_tasks(),
+        running_tasks=set(),
+    )
+    tasks_item = next(s for s in items[0].submenu if s.text == "Tasks")
+    assert len(tasks_item.submenu) == 2
+    assert [t.text for t in tasks_item.submenu] == ["Migrate", "NG test"]
+
+
+def test_menu_running_task_shows_disabled_suffix() -> None:
+    cfg = config.Config(projects=[_project_with_tasks("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers_with_tasks(),
+        running_tasks={"task:A:Migrate"},
+    )
+    tasks_item = next(s for s in items[0].submenu if s.text == "Tasks")
+    migrate = next(t for t in tasks_item.submenu if t.text.startswith("Migrate"))
+    assert migrate.text == "Migrate (running…)"
+    assert migrate.enabled is False
+
+
+def test_menu_config_without_scripts_has_no_scripts_entry() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers_with_tasks(),
+        running_tasks=set(),
+    )
+    texts = [i.text for i in items if not i.separator]
+    assert "Scripts" not in texts
+
+
+def test_menu_config_with_scripts_adds_scripts_submenu() -> None:
+    cfg = config.Config(
+        projects=[_project("A")],
+        scripts=(
+            config.Script(
+                name="Git pull", path=Path("D:\\x"), command="git pull"
+            ),
+        ),
+    )
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers_with_tasks(),
+        running_tasks=set(),
+    )
+    scripts_item = next(i for i in items if i.text == "Scripts")
+    assert [s.text for s in scripts_item.submenu] == ["Git pull"]
+
+
+def test_menu_running_script_shows_disabled_suffix() -> None:
+    cfg = config.Config(
+        projects=[_project("A")],
+        scripts=(
+            config.Script(name="Git pull", path=Path("D:\\x"), command="git pull"),
+        ),
+    )
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers_with_tasks(),
+        running_tasks={"script:Git pull"},
+    )
+    scripts_item = next(i for i in items if i.text == "Scripts")
+    git_pull = scripts_item.submenu[0]
+    assert git_pull.text == "Git pull (running…)"
+    assert git_pull.enabled is False
+
+
+def test_menu_scripts_item_placed_before_stop_all() -> None:
+    cfg = config.Config(
+        projects=[_project("A")],
+        scripts=(config.Script(name="S", path=Path("D:\\x"), command="git pull"),),
+    )
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers_with_tasks(),
+        running_tasks=set(),
+    )
+    # Order: project items, separator, Scripts, separator, Stop all, ...
+    non_sep = [i for i in items if not i.separator]
+    scripts_idx = next(i for i, e in enumerate(non_sep) if e.text == "Scripts")
+    stop_all_idx = next(i for i, e in enumerate(non_sep) if e.text == "Stop all")
+    assert scripts_idx < stop_all_idx

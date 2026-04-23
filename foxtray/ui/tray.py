@@ -47,6 +47,8 @@ class Handlers:
     on_stop_all: Callable[[], None]
     on_exit: Callable[[], None]
     on_stop_all_and_exit: Callable[[], None]
+    on_run_task: Callable[[config_mod.Project, config_mod.Task], None]
+    on_run_script: Callable[[config_mod.Script], None]
 
 
 def _status_to_icon_state(status: ProjectStatus) -> IconState:
@@ -167,6 +169,7 @@ def _project_submenu(
     project: config_mod.Project,
     icon_state: IconState,
     handlers: Handlers,
+    running_tasks: set[str],
 ) -> tuple[MenuItemSpec, ...]:
     is_stopped = icon_state == "stopped"
     if is_stopped:
@@ -177,7 +180,7 @@ def _project_submenu(
         start_or_stop = MenuItemSpec(
             text="Stop", action=lambda p=project: handlers.on_stop(p)
         )
-    return (
+    entries: list[MenuItemSpec] = [
         start_or_stop,
         MenuItemSpec(text="", separator=True),
         MenuItemSpec(
@@ -193,6 +196,30 @@ def _project_submenu(
             text="Open frontend folder",
             action=lambda path=project.frontend.path: handlers.on_open_folder(path),
         ),
+    ]
+    if project.tasks:
+        task_specs = tuple(
+            _task_spec(project, task, handlers, running_tasks)
+            for task in project.tasks
+        )
+        entries.append(MenuItemSpec(text="Tasks", submenu=task_specs))
+    return tuple(entries)
+
+
+def _task_spec(
+    project: config_mod.Project,
+    task: config_mod.Task,
+    handlers: Handlers,
+    running_tasks: set[str],
+) -> MenuItemSpec:
+    key = f"task:{project.name}:{task.name}"
+    if key in running_tasks:
+        return MenuItemSpec(
+            text=f"{task.name} (running…)", enabled=False,
+        )
+    return MenuItemSpec(
+        text=task.name,
+        action=lambda p=project, t=task: handlers.on_run_task(p, t),
     )
 
 
@@ -201,6 +228,7 @@ def build_menu_items(
     active: state_mod.ActiveProject | None,
     statuses: dict[str, ProjectStatus],
     handlers: Handlers,
+    running_tasks: set[str],
 ) -> list[MenuItemSpec]:
     items: list[MenuItemSpec] = []
     for project in cfg.projects:
@@ -209,9 +237,15 @@ def build_menu_items(
         items.append(
             MenuItemSpec(
                 text=f"{project.name} ({label})",
-                submenu=_project_submenu(project, proj_state, handlers),
+                submenu=_project_submenu(project, proj_state, handlers, running_tasks),
             )
         )
+    if cfg.scripts:
+        items.append(MenuItemSpec(text="", separator=True))
+        script_specs = tuple(
+            _script_spec(script, handlers, running_tasks) for script in cfg.scripts
+        )
+        items.append(MenuItemSpec(text="Scripts", submenu=script_specs))
     items.append(MenuItemSpec(text="", separator=True))
     items.append(
         MenuItemSpec(
@@ -230,6 +264,22 @@ def build_menu_items(
         )
     )
     return items
+
+
+def _script_spec(
+    script: config_mod.Script,
+    handlers: Handlers,
+    running_tasks: set[str],
+) -> MenuItemSpec:
+    key = f"script:{script.name}"
+    if key in running_tasks:
+        return MenuItemSpec(
+            text=f"{script.name} (running…)", enabled=False,
+        )
+    return MenuItemSpec(
+        text=script.name,
+        action=lambda s=script: handlers.on_run_script(s),
+    )
 
 
 class TrayApp:
@@ -356,6 +406,8 @@ class TrayApp:
             on_stop_all_and_exit=lambda: actions.on_stop_all_and_exit(
                 orch, icon, self._user_initiated_stop, _active_names()
             ),
+            on_run_task=lambda p, t: None,  # noqa: ARG005 — wired in Task 9
+            on_run_script=lambda s: None,   # noqa: ARG005 — wired in Task 9
         )
 
 
