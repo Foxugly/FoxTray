@@ -268,8 +268,11 @@ class TrayApp:
             log.warning("poll tick failed", exc_info=True)
             return
 
-        suppressed = set(self._user_initiated_stop)
-        self._user_initiated_stop.clear()
+        # Atomic swap: any handler calling .add(name) on the old set before we
+        # reassign goes into `suppressed`; any add after the reassign goes into
+        # the fresh set and survives to the next tick. Safe without a lock.
+        suppressed = self._user_initiated_stop
+        self._user_initiated_stop = set()
 
         for note in compute_transitions(
             self._prev_active, self._prev_statuses,
@@ -287,8 +290,10 @@ class TrayApp:
         self._prev_statuses = curr_statuses
 
     def _build_menu(self) -> tuple[pystray.MenuItem, ...]:
-        if self._icon is None:
-            return ()
+        # pystray only calls _build_menu after icon.run() has set self._icon,
+        # so no None-guard needed here. Transient errors during build fall
+        # through to a disabled "FoxTray error" placeholder item; the next
+        # menu open re-runs this method and recovers automatically.
         try:
             active = state_mod.load().active
             statuses = {
