@@ -116,3 +116,103 @@ def test_start_timeout_rejects_non_integer(tmp_path: Path) -> None:
     yaml_body = SAMPLE_YAML.rstrip() + '\n    start_timeout: "nope"\n'
     with pytest.raises(config.ConfigError):
         config.load(write_config(tmp_path, yaml_body))
+
+
+TASKS_YAML = """
+projects:
+  - name: FoxRunner
+    url: http://localhost:4200
+    backend:
+      path: D:\\\\projects\\\\foxrunner-server
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+    frontend:
+      path: D:\\\\projects\\\\foxrunner-frontend
+      command: ng serve --port 4200
+      port: 4200
+    tasks:
+      - name: Migrate
+        cwd: backend
+        command: python manage.py migrate
+      - name: Collect static
+        cwd: backend
+        command: python manage.py collectstatic --noinput
+      - name: NG test
+        cwd: frontend
+        command: ng test --watch=false
+"""
+
+
+def test_project_without_tasks_has_empty_tuple(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, SAMPLE_YAML))
+    assert cfg.projects[0].tasks == ()
+
+
+def test_project_parses_tasks_in_order(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, TASKS_YAML))
+    task_names = [t.name for t in cfg.projects[0].tasks]
+    assert task_names == ["Migrate", "Collect static", "NG test"]
+
+
+def test_task_backend_cwd_swaps_python(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, TASKS_YAML))
+    project = cfg.projects[0]
+    migrate = next(t for t in project.tasks if t.name == "Migrate")
+    cmd = migrate.resolved_command(project)
+    assert cmd[0] == str(project.backend.python_executable)
+    assert cmd[1:] == ["manage.py", "migrate"]
+
+
+def test_task_backend_cwd_does_not_swap_non_python(tmp_path: Path) -> None:
+    yaml = TASKS_YAML.replace(
+        "command: python manage.py migrate",
+        "command: pytest tests/",
+    )
+    cfg = config.load(write_config(tmp_path, yaml))
+    migrate = cfg.projects[0].tasks[0]
+    assert migrate.resolved_command(cfg.projects[0]) == ["pytest", "tests/"]
+
+
+def test_task_frontend_cwd_never_swaps(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, TASKS_YAML))
+    ng_test = next(t for t in cfg.projects[0].tasks if t.name == "NG test")
+    assert ng_test.resolved_command(cfg.projects[0])[0] == "ng"
+
+
+def test_task_resolved_cwd_backend(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, TASKS_YAML))
+    project = cfg.projects[0]
+    migrate = project.tasks[0]
+    assert migrate.resolved_cwd(project) == project.backend.path
+
+
+def test_task_resolved_cwd_frontend(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, TASKS_YAML))
+    project = cfg.projects[0]
+    ng_test = project.tasks[2]
+    assert ng_test.resolved_cwd(project) == project.frontend.path
+
+
+def test_task_rejects_invalid_cwd(tmp_path: Path) -> None:
+    yaml = TASKS_YAML.replace("cwd: backend", "cwd: sideways")
+    with pytest.raises(config.ConfigError, match="cwd"):
+        config.load(write_config(tmp_path, yaml))
+
+
+def test_task_rejects_empty_command(tmp_path: Path) -> None:
+    yaml = TASKS_YAML.replace("command: python manage.py migrate", 'command: ""')
+    with pytest.raises(config.ConfigError):
+        config.load(write_config(tmp_path, yaml))
+
+
+def test_task_rejects_duplicate_names_within_project(tmp_path: Path) -> None:
+    yaml = TASKS_YAML.replace("name: Collect static", "name: Migrate")
+    with pytest.raises(config.ConfigError, match="duplicate"):
+        config.load(write_config(tmp_path, yaml))
+
+
+def test_task_rejects_missing_name(tmp_path: Path) -> None:
+    yaml = TASKS_YAML.replace("- name: Migrate\n        cwd: backend", "- cwd: backend")
+    with pytest.raises(config.ConfigError):
+        config.load(write_config(tmp_path, yaml))

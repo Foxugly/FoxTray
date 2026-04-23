@@ -54,12 +54,31 @@ class Frontend:
 
 
 @dataclass(frozen=True)
+class Task:
+    name: str
+    cwd: str  # "backend" | "frontend"
+    command: str
+
+    def resolved_command(self, project: "Project") -> list[str]:
+        parts = shlex.split(self.command)
+        if not parts:
+            raise ConfigError(f"task {self.name!r} command is empty")
+        if self.cwd == "backend" and parts[0].lower() == "python":
+            return [str(project.backend.python_executable), *parts[1:]]
+        return parts
+
+    def resolved_cwd(self, project: "Project") -> Path:
+        return project.backend.path if self.cwd == "backend" else project.frontend.path
+
+
+@dataclass(frozen=True)
 class Project:
     name: str
     url: str
     backend: Backend
     frontend: Frontend
     start_timeout: int = 30
+    tasks: tuple[Task, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -99,6 +118,25 @@ def _parse_frontend(raw: dict[str, Any]) -> Frontend:
     )
 
 
+def _parse_task(raw: dict[str, Any], project_name: str) -> Task:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"project {project_name!r}: each task must be a mapping")
+    name = _require(raw, "name", f"project {project_name!r} task")
+    if not isinstance(name, str) or not name:
+        raise ConfigError(f"project {project_name!r}: task name must be a non-empty string")
+    cwd = _require(raw, "cwd", f"project {project_name!r} task {name!r}")
+    if cwd not in ("backend", "frontend"):
+        raise ConfigError(
+            f"project {project_name!r} task {name!r}: cwd must be 'backend' or 'frontend', got {cwd!r}"
+        )
+    command = _require(raw, "command", f"project {project_name!r} task {name!r}")
+    if not isinstance(command, str) or not shlex.split(command):
+        raise ConfigError(
+            f"project {project_name!r} task {name!r}: command must be a non-empty string"
+        )
+    return Task(name=name, cwd=cwd, command=command)
+
+
 def _parse_project(raw: dict[str, Any]) -> Project:
     name = _require(raw, "name", "project")
     start_timeout_raw = raw.get("start_timeout", 30)
@@ -110,12 +148,23 @@ def _parse_project(raw: dict[str, Any]) -> Project:
         raise ConfigError(
             f"project {name!r}: start_timeout must be > 0, got {start_timeout_raw}"
         )
+    tasks_raw = raw.get("tasks", [])
+    if not isinstance(tasks_raw, list):
+        raise ConfigError(f"project {name!r}: tasks must be a list")
+    tasks = tuple(_parse_task(t, name) for t in tasks_raw)
+    task_names = [t.name for t in tasks]
+    duplicate_tasks = {n for n in task_names if task_names.count(n) > 1}
+    if duplicate_tasks:
+        raise ConfigError(
+            f"project {name!r}: duplicate task names: {sorted(duplicate_tasks)}"
+        )
     return Project(
         name=name,
         url=_require(raw, "url", f"project {name!r}"),
         backend=_parse_backend(_require(raw, "backend", f"project {name!r}")),
         frontend=_parse_frontend(_require(raw, "frontend", f"project {name!r}")),
         start_timeout=start_timeout_raw,
+        tasks=tasks,
     )
 
 
