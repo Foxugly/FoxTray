@@ -7,7 +7,7 @@ from typing import Any
 import psutil
 import pytest
 
-from foxtray import config, project, state
+from foxtray import config, process, project, state
 
 
 @dataclass
@@ -279,3 +279,68 @@ def test_stop_skips_port_wait_for_unknown_project(
     orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
     orch.stop("NotInConfig")  # state.active is None anyway
     assert called == []
+
+
+def test_start_raises_port_in_use_when_backend_port_busy(
+    tmp_appdata: Path,
+    sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_wait(port: int, timeout: float = 10.0, interval: float = 0.2) -> bool:
+        return port != sample_project.backend.port  # backend port stays busy
+    monkeypatch.setattr(project.health, "wait_port_free", _fake_wait)
+
+    manager = _FakeManager()
+    orch = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
+    with pytest.raises(process.PortInUse) as excinfo:
+        orch.start(sample_project)
+    assert str(sample_project.backend.port) in str(excinfo.value)
+    # Popen should NOT have been called
+    assert manager.started == []
+
+
+def test_start_raises_port_in_use_when_frontend_port_busy(
+    tmp_appdata: Path,
+    sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_wait(port: int, timeout: float = 10.0, interval: float = 0.2) -> bool:
+        return port != sample_project.frontend.port  # frontend port stays busy
+    monkeypatch.setattr(project.health, "wait_port_free", _fake_wait)
+
+    manager = _FakeManager()
+    orch = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
+    with pytest.raises(process.PortInUse) as excinfo:
+        orch.start(sample_project)
+    assert str(sample_project.frontend.port) in str(excinfo.value)
+    # Popen was called for backend only (it failed AFTER backend was "freed"), but we
+    # want to assert NO spawns at all: the frontend check runs BEFORE any Popen.
+    assert manager.started == []
+
+
+def test_start_calls_wait_port_free_with_3s_timeout(
+    tmp_appdata: Path,
+    sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, float]] = []
+    def _fake_wait(port: int, timeout: float = 10.0, interval: float = 0.2) -> bool:
+        calls.append((port, timeout))
+        return True
+    monkeypatch.setattr(project.health, "wait_port_free", _fake_wait)
+
+    orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
+    orch.start(sample_project)
+    # Pre-check uses 3.0s timeout on both ports
+    assert (sample_project.backend.port, 3.0) in calls
+    assert (sample_project.frontend.port, 3.0) in calls
+
+    # Cleanup (_FakeManager.start spawns a real sleep() — reuse the existing cleanup
+    # pattern from test_start_records_pids_in_state)
+    active = state.load().active
+    assert active is not None
+    for pid in (active.backend_pid, active.frontend_pid):
+        try:
+            psutil.Process(pid).kill()
+        except psutil.NoSuchProcess:
+            pass

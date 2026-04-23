@@ -9,7 +9,7 @@ from typing import Protocol
 
 import psutil
 
-from foxtray import config, health, state
+from foxtray import config, health, process, state
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +57,15 @@ class Orchestrator:
             log.info("Stopping active project %s before starting %s", current.name, project.name)
             self._kill_pair(current.backend_pid, current.frontend_pid)
             state.clear()
+
+        if not health.wait_port_free(project.backend.port, timeout=3.0):
+            raise process.PortInUse(
+                f"backend port {project.backend.port} still in use"
+            )
+        if not health.wait_port_free(project.frontend.port, timeout=3.0):
+            raise process.PortInUse(
+                f"frontend port {project.frontend.port} still in use"
+            )
 
         backend_popen = self._manager.start(
             project=project.name,
