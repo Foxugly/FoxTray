@@ -1,3 +1,7 @@
+from pathlib import Path
+
+import pytest
+
 from foxtray import config, state
 from foxtray.project import ProjectStatus
 from foxtray.ui import tray
@@ -120,9 +124,6 @@ def test_transitions_no_change_returns_empty() -> None:
     assert notifications == []
 
 
-from pathlib import Path
-
-
 def _project(name: str, url: str = "http://localhost:4200") -> config.Project:
     return config.Project(
         name=name,
@@ -217,6 +218,29 @@ def test_menu_has_exit_and_stop_all_and_exit() -> None:
     texts = [i.text for i in items if not i.separator]
     assert "Exit" in texts
     assert "Stop all and exit" in texts
+    # Ordering is part of the contract: Exit comes right before Stop all and exit.
+    assert texts.index("Exit") + 1 == texts.index("Stop all and exit")
+
+
+def test_menu_partial_project_shows_stop() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
+    statuses = {"A": _status(backend_alive=True, frontend_alive=False)}
+    items = tray.build_menu_items(cfg, active, statuses, _noop_handlers())
+    submenu_texts = [s.text for s in items[0].submenu]
+    assert "Stop" in submenu_texts
+    assert "Start" not in submenu_texts
+    # Open in browser must be enabled for partial too (one component is alive).
+    browser_item = next(s for s in items[0].submenu if s.text == "Open in browser")
+    assert browser_item.enabled is True
+
+
+def test_dead_component_raises_on_invariant_violation() -> None:
+    # Both statuses have the same alive pattern → no component "died" between
+    # them. Reaching _dead_component in this state means the caller broke its
+    # contract; fail loudly.
+    with pytest.raises(AssertionError):
+        tray._dead_component(_status(), _status())
 
 
 def test_menu_project_label_reflects_status() -> None:
