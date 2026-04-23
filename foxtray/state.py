@@ -1,0 +1,49 @@
+"""Persistence of the currently-active project and its subprocess PIDs."""
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import asdict, dataclass
+from typing import Any
+
+from foxtray import paths
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ActiveProject:
+    name: str
+    backend_pid: int
+    frontend_pid: int
+
+
+@dataclass(frozen=True)
+class State:
+    active: ActiveProject | None
+
+
+def load() -> State:
+    path = paths.state_file()
+    if not path.exists():
+        return State(active=None)
+    try:
+        raw: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        log.warning("state.json is unreadable; treating as empty", exc_info=True)
+        return State(active=None)
+    active_raw = raw.get("active")
+    if not active_raw:
+        return State(active=None)
+    return State(active=ActiveProject(**active_raw))
+
+
+def save(state: State) -> None:
+    paths.ensure_dirs()
+    path = paths.state_file()
+    payload = {"active": asdict(state.active) if state.active else None}
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def clear() -> None:
+    save(State(active=None))
