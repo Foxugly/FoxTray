@@ -133,3 +133,80 @@ def compute_transitions(
         # is silent by design.
 
     return notifications
+
+
+def _project_label(state: IconState) -> str:
+    return {
+        "running": "RUNNING",
+        "partial": "PARTIAL",
+        "stopped": "stopped",
+    }[state]
+
+
+def _project_submenu(
+    project: config_mod.Project,
+    icon_state: IconState,
+    handlers: Handlers,
+) -> tuple[MenuItemSpec, ...]:
+    is_stopped = icon_state == "stopped"
+    if is_stopped:
+        start_or_stop = MenuItemSpec(
+            text="Start", action=lambda p=project: handlers.on_start(p)
+        )
+    else:
+        start_or_stop = MenuItemSpec(
+            text="Stop", action=lambda p=project: handlers.on_stop(p)
+        )
+    return (
+        start_or_stop,
+        MenuItemSpec(text="", separator=True),
+        MenuItemSpec(
+            text="Open in browser",
+            action=lambda p=project: handlers.on_open_browser(p),
+            enabled=not is_stopped,
+        ),
+        MenuItemSpec(
+            text="Open backend folder",
+            action=lambda path=project.backend.path: handlers.on_open_folder(path),
+        ),
+        MenuItemSpec(
+            text="Open frontend folder",
+            action=lambda path=project.frontend.path: handlers.on_open_folder(path),
+        ),
+    )
+
+
+def build_menu_items(
+    cfg: config_mod.Config,
+    active: state_mod.ActiveProject | None,
+    statuses: dict[str, ProjectStatus],
+    handlers: Handlers,
+) -> list[MenuItemSpec]:
+    items: list[MenuItemSpec] = []
+    for project in cfg.projects:
+        proj_state = _project_icon_state(project.name, active, statuses.get(project.name))
+        label = _project_label(proj_state)
+        items.append(
+            MenuItemSpec(
+                text=f"{project.name} ({label})",
+                submenu=_project_submenu(project, proj_state, handlers),
+            )
+        )
+    items.append(MenuItemSpec(text="", separator=True))
+    items.append(
+        MenuItemSpec(
+            text="Stop all",
+            action=handlers.on_stop_all,
+            enabled=active is not None,
+        )
+    )
+    items.append(MenuItemSpec(text="", separator=True))
+    items.append(MenuItemSpec(text="Exit", action=handlers.on_exit))
+    items.append(
+        MenuItemSpec(
+            text="Stop all and exit",
+            action=handlers.on_stop_all_and_exit,
+            enabled=active is not None,
+        )
+    )
+    return items
