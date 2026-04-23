@@ -145,7 +145,7 @@ def test_on_exit_calls_icon_stop() -> None:
             self.stopped = True
 
     icon = _Icon()
-    actions.on_exit(icon)
+    actions.on_exit(icon, _FakeTaskManager())
     assert icon.stopped is True
 
 
@@ -178,7 +178,7 @@ def test_on_stop_all_and_exit_stops_then_exits() -> None:
     orch = _FakeOrchestrator()
     icon = _Icon()
     user_initiated: set[str] = set()
-    actions.on_stop_all_and_exit(orch, icon, user_initiated, active_names=["FoxRunner"])
+    actions.on_stop_all_and_exit(orch, icon, user_initiated, active_names=["FoxRunner"], task_manager=_FakeTaskManager())
     assert orch.stop_all_called == 1
     assert user_initiated == {"FoxRunner"}
     assert icon.stopped is True
@@ -240,3 +240,62 @@ def test_on_run_script_already_running_notifies() -> None:
     icon = _FakeIcon()
     actions.on_run_script(tm, _script(), icon)
     assert any("already running" in message for _title, message in icon.notifications)
+
+
+def test_on_exit_calls_kill_all_and_notifies_if_nonzero() -> None:
+    tm = _FakeTaskManager(killed_count=3)
+
+    class _Icon:
+        def __init__(self) -> None:
+            self.stopped = False
+            self.notifications: list[tuple[str, str]] = []
+        def notify(self, message: str, title: str = "") -> None:
+            self.notifications.append((title, message))
+        def stop(self) -> None:
+            self.stopped = True
+
+    icon = _Icon()
+    actions.on_exit(icon, tm)
+    assert icon.stopped is True
+    assert any("3" in message and "killed" in message for _t, message in icon.notifications)
+
+
+def test_on_exit_silent_if_zero_tasks_killed() -> None:
+    tm = _FakeTaskManager(killed_count=0)
+
+    class _Icon:
+        def __init__(self) -> None:
+            self.stopped = False
+            self.notifications: list[tuple[str, str]] = []
+        def notify(self, message: str, title: str = "") -> None:
+            self.notifications.append((title, message))
+        def stop(self) -> None:
+            self.stopped = True
+
+    icon = _Icon()
+    actions.on_exit(icon, tm)
+    assert icon.stopped is True
+    assert icon.notifications == []
+
+
+def test_on_stop_all_and_exit_calls_kill_all_and_stop_all() -> None:
+    tm = _FakeTaskManager(killed_count=0)
+    orch = _FakeOrchestrator()
+    user_initiated: set[str] = set()
+
+    class _Icon:
+        def __init__(self) -> None:
+            self.stopped = False
+            self.notifications: list[tuple[str, str]] = []
+        def notify(self, message: str, title: str = "") -> None:
+            self.notifications.append((title, message))
+        def stop(self) -> None:
+            self.stopped = True
+
+    icon = _Icon()
+    actions.on_stop_all_and_exit(
+        orch, icon, user_initiated, active_names=["FoxRunner"], task_manager=tm,
+    )
+    assert orch.stop_all_called == 1
+    assert icon.stopped is True
+    # kill_all was invoked (0 in this case — silent)

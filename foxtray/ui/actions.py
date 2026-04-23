@@ -88,8 +88,13 @@ def on_stop_all(
         _notify_error(icon, exc)
 
 
-def on_exit(icon: Closable) -> None:
-    # If icon.stop() raises, let it propagate — shutdown should be loud.
+def on_exit(icon: Closable, task_manager: _TaskRunnerProtocol) -> None:
+    killed = task_manager.kill_all()
+    if killed > 0:
+        try:
+            icon.notify(f"{killed} task(s) killed", title="FoxTray")  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
     icon.stop()
 
 
@@ -98,16 +103,21 @@ def on_stop_all_and_exit(
     icon: NotifierClosable,
     user_initiated: set[str],
     active_names: Sequence[str],
+    task_manager: _TaskRunnerProtocol,
 ) -> None:
     for name in active_names:
         user_initiated.add(name)
     try:
         orchestrator.stop_all()
     except Exception as exc:  # noqa: BLE001
-        _notify_error(icon, exc)
-    # Windows balloon notifications are async; if we just fired one above, it
-    # may not render before icon.stop() tears down the message pump. That's
-    # acceptable on the exit path — the user is closing the app.
+        if hasattr(icon, "notify"):
+            _notify_error(icon, exc)  # type: ignore[arg-type]
+    killed = task_manager.kill_all()
+    if killed > 0:
+        try:
+            icon.notify(f"{killed} task(s) killed", title="FoxTray")  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
     icon.stop()
 
 
