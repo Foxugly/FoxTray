@@ -1,12 +1,13 @@
 """Per-project/component log files with one-deep rotation."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import IO
 
 from foxtray import paths
 
 
-def _previous_path(project: str, component: str):
+def _previous_path(project: str, component: str) -> Path:
     current = paths.log_file(project, component)
     return current.parent / f"{current.stem}.log.1"
 
