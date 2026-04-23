@@ -31,5 +31,12 @@ def log_file(project: str, component: str) -> Path:
     return logs_dir() / f"{project}_{component}.log"
 
 
+def task_log_file(key: str) -> Path:
+    """Path to the log file for a task/script key. Colons in the key are
+    replaced with underscores for Windows filesystem safety."""
+    sanitized = key.replace(":", "_")
+    return appdata_root() / "logs" / "tasks" / f"{sanitized}.log"
+
+
 def ensure_dirs() -> None:
     logs_dir().mkdir(parents=True, exist_ok=True)

@@ -35,3 +35,27 @@ def tail(project: str, component: str, lines: int = 200) -> list[str]:
         return []
     content = path.read_text(encoding="utf-8").splitlines()
     return content[-lines:]
+
+
+def _previous_task_path(key: str) -> Path:
+    current = paths.task_log_file(key)
+    return current.parent / f"{current.stem}.log.1"
+
+
+def rotate_task(key: str) -> None:
+    """Rotate the log file for a task/script key. Creates the tasks/ subdir."""
+    current = paths.task_log_file(key)
+    current.parent.mkdir(parents=True, exist_ok=True)
+    if not current.exists():
+        return
+    previous = _previous_task_path(key)
+    if previous.exists():
+        previous.unlink()
+    current.rename(previous)
+
+
+def open_task_writer(key: str) -> IO[str]:
+    """Open the current task log file for writing. Caller closes."""
+    path = paths.task_log_file(key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path.open("w", encoding="utf-8", buffering=1)
