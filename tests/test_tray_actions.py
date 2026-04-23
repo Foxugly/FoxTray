@@ -40,6 +40,7 @@ class _FakeOrchestrator:
     stopped: list[str] = field(default_factory=list)
     stop_all_called: int = 0
     raises: Exception | None = None
+    pending_starts: set[str] = field(default_factory=set)
 
     def start(self, project: Any) -> None:
         if self.raises:
@@ -128,6 +129,20 @@ def test_on_exit_calls_icon_stop() -> None:
     icon = _Icon()
     actions.on_exit(icon)
     assert icon.stopped is True
+
+
+def test_on_start_adds_to_pending_starts_before_calling_orchestrator() -> None:
+    orch = _FakeOrchestrator()
+    actions.on_start(orch, _project(), _FakeIcon())
+    assert orch.pending_starts == {"Demo"}
+
+
+def test_on_start_removes_from_pending_starts_on_exception() -> None:
+    orch = _FakeOrchestrator(raises=RuntimeError("boom"))
+    icon = _FakeIcon()
+    actions.on_start(orch, _project(), icon)
+    assert orch.pending_starts == set()
+    assert icon.notifications == [("FoxTray error", "boom")]
 
 
 def test_on_stop_all_and_exit_stops_then_exits() -> None:

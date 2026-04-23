@@ -39,9 +39,11 @@ def _notify_error(icon: Notifier, exc: Exception) -> None:
 
 
 def on_start(orchestrator: Orchestrator, project: config.Project, icon: Notifier) -> None:
+    orchestrator.pending_starts.add(project.name)
     try:
         orchestrator.start(project)
     except Exception as exc:  # noqa: BLE001 — tray must survive any handler error
+        orchestrator.pending_starts.discard(project.name)
         _notify_error(icon, exc)
 
 
