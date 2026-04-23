@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from foxtray import state
 
 
@@ -33,4 +34,48 @@ def test_load_recovers_from_schema_mismatch(tmp_appdata: Path) -> None:
         '{"active": {"name": "X", "backend_pid": 1, "frontend_pid": 2, "stale_key": true}}',
         encoding="utf-8",
     )
+    assert state.load().active is None
+
+
+def test_clear_if_orphaned_noop_when_no_active(tmp_appdata: Path) -> None:
+    state.save(state.State(active=None))
+    assert state.clear_if_orphaned() is False
+    assert state.load().active is None
+
+
+def test_clear_if_orphaned_noop_when_backend_alive(
+    tmp_appdata: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state.save(state.State(active=state.ActiveProject(
+        name="X", backend_pid=111, frontend_pid=222
+    )))
+    monkeypatch.setattr(
+        state.psutil, "pid_exists", lambda pid: pid == 111
+    )
+    assert state.clear_if_orphaned() is False
+    assert state.load().active is not None
+    assert state.load().active.name == "X"
+
+
+def test_clear_if_orphaned_noop_when_frontend_alive(
+    tmp_appdata: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state.save(state.State(active=state.ActiveProject(
+        name="X", backend_pid=111, frontend_pid=222
+    )))
+    monkeypatch.setattr(
+        state.psutil, "pid_exists", lambda pid: pid == 222
+    )
+    assert state.clear_if_orphaned() is False
+    assert state.load().active is not None
+
+
+def test_clear_if_orphaned_clears_when_both_dead(
+    tmp_appdata: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state.save(state.State(active=state.ActiveProject(
+        name="X", backend_pid=111, frontend_pid=222
+    )))
+    monkeypatch.setattr(state.psutil, "pid_exists", lambda pid: False)
+    assert state.clear_if_orphaned() is True
     assert state.load().active is None

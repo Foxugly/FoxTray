@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+
+import psutil
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -47,3 +49,17 @@ def save(state: State) -> None:
 
 def clear() -> None:
     save(State(active=None))
+
+
+def clear_if_orphaned() -> bool:
+    """Clear state.json.active if both recorded PIDs are dead.
+
+    Returns True if a clear was performed, False otherwise.
+    """
+    s = load()
+    if s.active is None:
+        return False
+    if psutil.pid_exists(s.active.backend_pid) or psutil.pid_exists(s.active.frontend_pid):
+        return False
+    save(State(active=None))
+    return True
