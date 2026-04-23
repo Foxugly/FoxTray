@@ -216,3 +216,84 @@ def test_task_rejects_missing_name(tmp_path: Path) -> None:
     yaml = TASKS_YAML.replace("- name: Migrate\n        cwd: backend", "- cwd: backend")
     with pytest.raises(config.ConfigError):
         config.load(write_config(tmp_path, yaml))
+
+
+SCRIPTS_YAML = """
+projects:
+  - name: FoxRunner
+    url: http://localhost:4200
+    backend:
+      path: D:\\\\projects\\\\foxrunner-server
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+    frontend:
+      path: D:\\\\projects\\\\foxrunner-frontend
+      command: ng serve --port 4200
+      port: 4200
+
+scripts:
+  - name: Git pull all
+    path: D:\\\\PycharmProjects
+    command: git pull --recurse
+  - name: Run migrations
+    path: D:\\\\scripts\\\\migrations
+    venv: .venv
+    command: python one_off.py
+"""
+
+
+def test_config_without_scripts_has_empty_tuple(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, SAMPLE_YAML))
+    assert cfg.scripts == ()
+
+
+def test_config_parses_scripts(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, SCRIPTS_YAML))
+    names = [s.name for s in cfg.scripts]
+    assert names == ["Git pull all", "Run migrations"]
+
+
+def test_script_without_venv_does_not_swap(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, SCRIPTS_YAML))
+    git_pull = cfg.scripts[0]
+    assert git_pull.resolved_command() == ["git", "pull", "--recurse"]
+
+
+def test_script_with_venv_swaps_python(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, SCRIPTS_YAML))
+    migration = cfg.scripts[1]
+    cmd = migration.resolved_command()
+    assert cmd[0] == str(Path("D:\\scripts\\migrations") / ".venv" / "Scripts" / "python.exe")
+    assert cmd[1:] == ["one_off.py"]
+
+
+def test_script_with_venv_but_non_python_command_no_swap(tmp_path: Path) -> None:
+    yaml = SCRIPTS_YAML.replace("command: python one_off.py", "command: bash script.sh")
+    cfg = config.load(write_config(tmp_path, yaml))
+    migration = cfg.scripts[1]
+    assert migration.resolved_command() == ["bash", "script.sh"]
+
+
+def test_script_rejects_relative_path(tmp_path: Path) -> None:
+    yaml = SCRIPTS_YAML.replace("path: D:\\\\PycharmProjects", "path: relative/path")
+    with pytest.raises(config.ConfigError, match="absolute"):
+        config.load(write_config(tmp_path, yaml))
+
+
+def test_script_rejects_duplicate_names(tmp_path: Path) -> None:
+    yaml = SCRIPTS_YAML.replace("name: Run migrations", "name: Git pull all")
+    with pytest.raises(config.ConfigError, match="duplicate"):
+        config.load(write_config(tmp_path, yaml))
+
+
+def test_script_rejects_empty_command(tmp_path: Path) -> None:
+    yaml = SCRIPTS_YAML.replace("command: git pull --recurse", 'command: ""')
+    with pytest.raises(config.ConfigError):
+        config.load(write_config(tmp_path, yaml))
+
+
+def test_script_rejects_empty_venv_string(tmp_path: Path) -> None:
+    yaml = SCRIPTS_YAML.replace("venv: .venv", 'venv: ""')
+    with pytest.raises(config.ConfigError, match="venv"):
+        config.load(write_config(tmp_path, yaml))

@@ -82,8 +82,25 @@ class Project:
 
 
 @dataclass(frozen=True)
+class Script:
+    name: str
+    path: Path
+    command: str
+    venv: str | None = None
+
+    def resolved_command(self) -> list[str]:
+        parts = shlex.split(self.command)
+        if not parts:
+            raise ConfigError(f"script {self.name!r} command is empty")
+        if self.venv and parts[0].lower() == "python":
+            return [str(self.path / self.venv / "Scripts" / "python.exe"), *parts[1:]]
+        return parts
+
+
+@dataclass(frozen=True)
 class Config:
     projects: list[Project] = field(default_factory=list)
+    scripts: tuple[Script, ...] = ()
 
     def get(self, name: str) -> Project:
         for project in self.projects:
@@ -168,6 +185,25 @@ def _parse_project(raw: dict[str, Any]) -> Project:
     )
 
 
+def _parse_script(raw: dict[str, Any]) -> Script:
+    if not isinstance(raw, dict):
+        raise ConfigError("each script must be a mapping")
+    name = _require(raw, "name", "script")
+    if not isinstance(name, str) or not name:
+        raise ConfigError("script name must be a non-empty string")
+    path_raw = _require(raw, "path", f"script {name!r}")
+    path = Path(path_raw)
+    if not path.is_absolute():
+        raise ConfigError(f"script {name!r}: path must be absolute, got {path_raw!r}")
+    command = _require(raw, "command", f"script {name!r}")
+    if not isinstance(command, str) or not shlex.split(command):
+        raise ConfigError(f"script {name!r}: command must be a non-empty string")
+    venv = raw.get("venv")
+    if venv is not None and (not isinstance(venv, str) or not venv):
+        raise ConfigError(f"script {name!r}: venv must be a non-empty string if present")
+    return Script(name=name, path=path, command=command, venv=venv)
+
+
 def load(path: Path) -> Config:
     with path.open("r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh) or {}
@@ -179,4 +215,12 @@ def load(path: Path) -> Config:
     duplicates = {n for n in names if names.count(n) > 1}
     if duplicates:
         raise ConfigError(f"duplicate project names: {sorted(duplicates)}")
-    return Config(projects=projects)
+    scripts_raw = raw.get("scripts", [])
+    if not isinstance(scripts_raw, list):
+        raise ConfigError("'scripts' must be a list")
+    scripts = tuple(_parse_script(s) for s in scripts_raw)
+    script_names = [s.name for s in scripts]
+    dup_scripts = {n for n in script_names if script_names.count(n) > 1}
+    if dup_scripts:
+        raise ConfigError(f"duplicate script names: {sorted(dup_scripts)}")
+    return Config(projects=projects, scripts=scripts)
