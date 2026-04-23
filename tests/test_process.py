@@ -89,11 +89,27 @@ def test_start_resolves_bare_executable_name(
 def test_start_raises_executable_not_found_for_missing_bin(
     manager: process.ProcessManager, tmp_appdata: Path
 ) -> None:
-    with pytest.raises(process.ExecutableNotFound, match="not-a-real-binary-xyzzy"):
+    with pytest.raises(process.ExecutableNotFound, match="not found on PATH"):
         manager.start(
             project="UnitTest",
             component="backend",
             command=["not-a-real-binary-xyzzy", "--help"],
+            cwd=Path.cwd(),
+        )
+
+
+def test_start_raises_executable_not_found_for_missing_absolute_path(
+    manager: process.ProcessManager, tmp_appdata: Path, tmp_path: Path
+) -> None:
+    # Missing venv scenario: config points to a python.exe that doesn't exist.
+    # Error message must say "does not exist", not "not found on PATH", since
+    # PATH is irrelevant for absolute paths.
+    missing = tmp_path / "nonexistent" / "python.exe"
+    with pytest.raises(process.ExecutableNotFound, match="does not exist"):
+        manager.start(
+            project="UnitTest",
+            component="backend",
+            command=[str(missing), "manage.py", "runserver"],
             cwd=Path.cwd(),
         )
 

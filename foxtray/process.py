@@ -24,14 +24,19 @@ _CREATION_FLAGS = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 def _resolve_command(command: list[str]) -> list[str]:
     # On Windows, subprocess.Popen with shell=False does NOT honor PATHEXT: calling
     # Popen(['ng', ...]) fails with FileNotFoundError because the real file is 'ng.CMD'.
-    # shutil.which walks PATH + PATHEXT and returns the absolute path we need.
+    # shutil.which walks PATH + PATHEXT and returns the absolute path we need; for
+    # an absolute path it returns the path unchanged if the file exists, else None.
     if not command:
         raise ValueError("command must not be empty")
-    exe = shutil.which(command[0])
+    raw = command[0]
+    exe = shutil.which(raw)
     if exe is None:
-        raise ExecutableNotFound(
-            f"Executable not found on PATH: {command[0]!r}"
-        )
+        # Distinguish "bare name that PATH doesn't resolve" from "absolute path
+        # that points at a nonexistent file" — the latter is usually a config
+        # issue (missing venv) and deserves a clearer error.
+        if Path(raw).is_absolute() or "/" in raw or "\\" in raw:
+            raise ExecutableNotFound(f"Executable does not exist: {raw}")
+        raise ExecutableNotFound(f"Executable not found on PATH: {raw!r}")
     return [exe, *command[1:]]
 
 
