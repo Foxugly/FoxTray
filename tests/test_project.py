@@ -7,7 +7,7 @@ from typing import Any
 import psutil
 import pytest
 
-from foxtray import config, process, project, state
+from foxtray import config, project, state
 
 
 @dataclass
@@ -129,3 +129,36 @@ def test_status_alive_when_pids_exist(
         frontend_proc.kill()
         backend_proc.wait(timeout=5)
         frontend_proc.wait(timeout=5)
+
+
+def test_start_kills_backend_if_frontend_launch_fails(
+    tmp_appdata: Path, sample_project: config.Project
+) -> None:
+    class _BrokenFrontendManager:
+        def __init__(self) -> None:
+            self.killed: list[int] = []
+            self._calls = 0
+
+        def start(self, *, project: str, component: str, command: list[str], cwd: Path):
+            self._calls += 1
+            if self._calls == 1:
+                return subprocess.Popen(
+                    [sys.executable, "-c", "import time; time.sleep(30)"],
+                )
+            raise RuntimeError("frontend start exploded")
+
+        def kill_tree(self, pid: int, timeout: float = 5.0) -> None:
+            self.killed.append(pid)
+            try:
+                psutil.Process(pid).kill()
+            except psutil.NoSuchProcess:
+                pass
+
+    manager = _BrokenFrontendManager()
+    orchestrator = project.Orchestrator(manager=manager)
+
+    with pytest.raises(RuntimeError, match="frontend start exploded"):
+        orchestrator.start(sample_project)
+
+    assert len(manager.killed) == 1, "backend should have been killed when frontend failed"
+    assert state.load().active is None, "state should not record a partial start"

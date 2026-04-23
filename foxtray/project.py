@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -13,7 +14,9 @@ log = logging.getLogger(__name__)
 
 
 class _ManagerProtocol(Protocol):
-    def start(self, *, project: str, component: str, command: list[str], cwd): ...
+    def start(
+        self, *, project: str, component: str, command: list[str], cwd
+    ) -> subprocess.Popen[bytes]: ...
 
     def kill_tree(self, pid: int, timeout: float = 5.0) -> None: ...
 
@@ -46,12 +49,16 @@ class Orchestrator:
             command=project.backend.resolved_command,
             cwd=project.backend.path,
         )
-        frontend_popen = self._manager.start(
-            project=project.name,
-            component="frontend",
-            command=project.frontend.resolved_command,
-            cwd=project.frontend.path,
-        )
+        try:
+            frontend_popen = self._manager.start(
+                project=project.name,
+                component="frontend",
+                command=project.frontend.resolved_command,
+                cwd=project.frontend.path,
+            )
+        except Exception:
+            self._manager.kill_tree(backend_popen.pid)
+            raise
         state.save(
             state.State(
                 active=state.ActiveProject(
@@ -86,9 +93,9 @@ class Orchestrator:
             running=backend_alive and frontend_alive,
             backend_alive=backend_alive,
             frontend_alive=frontend_alive,
-            backend_port_listening=health.port_listening(project.backend.port),
-            frontend_port_listening=health.port_listening(project.frontend.port),
-            url_ok=health.http_ok(project.url),
+            backend_port_listening=health.port_listening(project.backend.port) if backend_alive else False,
+            frontend_port_listening=health.port_listening(project.frontend.port) if frontend_alive else False,
+            url_ok=health.http_ok(project.url) if (backend_alive and frontend_alive) else False,
         )
 
     def _kill_pair(self, backend_pid: int, frontend_pid: int) -> None:
