@@ -45,6 +45,30 @@ def _resolve_command(command: list[str]) -> list[str]:
     return [exe, *command[1:]]
 
 
+def spawn_with_log(
+    command: list[str], cwd: Path, log_file
+) -> subprocess.Popen[bytes]:
+    """Spawn a process with stdout+stderr redirected to log_file.
+
+    Resolves the command via the same _resolve_command path used by
+    ProcessManager.start (so PATHEXT / absolute-path quirks behave the same),
+    closes log_file on Popen failure, and uses the module's _CREATION_FLAGS.
+    Caller owns the Popen's lifecycle.
+    """
+    try:
+        resolved = _resolve_command(command)
+        return subprocess.Popen(
+            resolved,
+            cwd=str(cwd),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            creationflags=_CREATION_FLAGS,
+        )
+    except Exception:
+        log_file.close()
+        raise
+
+
 class ProcessManager:
     """Starts child processes with stdout+stderr redirected to rotating log files."""
 
@@ -56,20 +80,9 @@ class ProcessManager:
         command: list[str],
         cwd: Path,
     ) -> subprocess.Popen[bytes]:
-        resolved = _resolve_command(command)
         logs.rotate(project, component)
         log_file = logs.open_writer(project, component)
-        try:
-            return subprocess.Popen(
-                resolved,
-                cwd=str(cwd),
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                creationflags=_CREATION_FLAGS,
-            )
-        except Exception:
-            log_file.close()
-            raise
+        return spawn_with_log(command, cwd, log_file)
 
     def kill_tree(self, pid: int, timeout: float = 5.0) -> None:
         """Terminate the process and every descendant it has."""

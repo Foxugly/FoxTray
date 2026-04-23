@@ -137,3 +137,32 @@ def test_port_in_use_is_a_runtime_error() -> None:
     exc = PortInUse("port 8000 still in use")
     assert isinstance(exc, RuntimeError)
     assert "8000" in str(exc)
+
+
+def test_spawn_with_log_runs_command_and_redirects_output(tmp_path: Path) -> None:
+    from foxtray import process
+
+    log_file = (tmp_path / "out.log").open("w", encoding="utf-8", buffering=1)
+    popen = process.spawn_with_log(
+        [sys.executable, "-c", "print('hello')"],
+        cwd=tmp_path,
+        log_file=log_file,
+    )
+    popen.wait()
+    log_file.close()
+    content = (tmp_path / "out.log").read_text(encoding="utf-8")
+    assert "hello" in content
+
+
+def test_spawn_with_log_closes_log_file_on_popen_failure(tmp_path: Path) -> None:
+    from foxtray import process
+
+    log_file = (tmp_path / "out.log").open("w", encoding="utf-8", buffering=1)
+    with pytest.raises(process.ExecutableNotFound):
+        process.spawn_with_log(
+            ["definitely-not-a-real-binary-abc123"],
+            cwd=tmp_path,
+            log_file=log_file,
+        )
+    # log_file should be closed after the raise
+    assert log_file.closed
