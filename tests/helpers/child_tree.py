@@ -7,7 +7,7 @@ import time
 
 if __name__ == "__main__":
     grandchild = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(120)"],
+        [sys.executable, "-c", "import time; time.sleep(10)"],
     )
     print(grandchild.pid, flush=True)
-    time.sleep(120)
+    time.sleep(10)

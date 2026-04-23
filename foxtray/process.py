@@ -36,7 +36,6 @@ class ProcessManager:
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 creationflags=_CREATION_FLAGS,
-                close_fds=False,
             )
         except Exception:
             log_file.close()
@@ -64,4 +63,10 @@ class ProcessManager:
                 proc.kill()
             except psutil.NoSuchProcess:
                 continue
-        psutil.wait_procs(still_alive, timeout=timeout)
+        _, unkillable = psutil.wait_procs(still_alive, timeout=timeout)
+        if unkillable:
+            log.warning(
+                "kill_tree: %d process(es) survived terminate+kill: %s",
+                len(unkillable),
+                [p.pid for p in unkillable],
+            )
