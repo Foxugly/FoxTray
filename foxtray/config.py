@@ -13,6 +13,10 @@ class ConfigError(ValueError):
     """Raised when config.yaml is missing required fields or malformed."""
 
 
+class ProjectNotFound(KeyError):
+    """Raised when Config.get is called with a name that isn't in the config."""
+
+
 @dataclass(frozen=True)
 class Backend:
     path: Path
@@ -61,7 +65,7 @@ class Config:
         for project in self.projects:
             if project.name == name:
                 return project
-        raise KeyError(name)
+        raise ProjectNotFound(name)
 
 
 def _require(mapping: dict[str, Any], key: str, context: str) -> Any:

@@ -6,7 +6,7 @@ import logging
 import sys
 from pathlib import Path
 
-from foxtray import config, process, project, state
+from foxtray import config, process, project
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +99,9 @@ def main(argv: list[str] | None = None) -> int:
     except config.ConfigError as exc:
         print(f"Config error: {exc}", file=sys.stderr)
         return 2
-    except KeyError as exc:
+    except OSError as exc:
+        print(f"Cannot open config: {exc}", file=sys.stderr)
+        return 2
+    except config.ProjectNotFound as exc:
         print(f"Unknown project: {exc.args[0]}", file=sys.stderr)
         return 2

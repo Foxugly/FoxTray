@@ -52,3 +52,26 @@ def test_config_error_returns_2(tmp_appdata: Path, tmp_path: Path, capsys: pytes
     err = capsys.readouterr().err
     assert rc == 2
     assert "Config error" in err
+
+
+def test_missing_config_file_returns_2(tmp_appdata: Path, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    missing = tmp_path / "does-not-exist.yaml"
+    rc = cli.main(["--config", str(missing), "list"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "Cannot open config" in err
+
+
+def test_unrelated_keyerror_is_not_swallowed(
+    demo_config: Path, tmp_appdata: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A KeyError from inside command execution that is NOT a ProjectNotFound must propagate."""
+    original_load = cli.config.load
+
+    def _load_raising_bare_keyerror(*args, **kwargs):
+        # Simulate some internal subsystem raising a bare KeyError
+        raise KeyError("not-a-project-name")
+
+    monkeypatch.setattr(cli.config, "load", _load_raising_bare_keyerror)
+    with pytest.raises(KeyError, match="not-a-project-name"):
+        cli.main(["--config", str(demo_config), "list"])
