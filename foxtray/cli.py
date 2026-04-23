@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from foxtray import config, process, project, state
+from foxtray.ui import tray as tray_module
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +67,13 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tray(args: argparse.Namespace) -> int:
+    cfg = config.load(args.config)
+    orchestrator = project.Orchestrator(manager=process.ProcessManager())
+    tray_module.TrayApp(cfg, orchestrator).run()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="foxtray")
     parser.add_argument(
@@ -91,6 +99,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="Detailed health for one project")
     p_status.add_argument("name")
     p_status.set_defaults(func=cmd_status)
+
+    sub.add_parser(
+        "tray", help="Run FoxTray as a Windows tray icon"
+    ).set_defaults(func=cmd_tray)
 
     return parser
 

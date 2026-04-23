@@ -85,3 +85,23 @@ def test_stop_reports_noop_when_not_active(
     assert rc == 0
     assert "was not active" in out
     assert "Stopped Demo" not in out
+
+
+def test_tray_command_parses_and_dispatches(
+    demo_config: Path, tmp_appdata: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called: list[str] = []
+
+    class _FakeTray:
+        def __init__(self, cfg, orchestrator) -> None:  # type: ignore[no-untyped-def]
+            called.append(f"init:{len(cfg.projects)}")
+
+        def run(self) -> None:
+            called.append("run")
+
+    from foxtray.ui import tray as tray_mod
+    monkeypatch.setattr(tray_mod, "TrayApp", _FakeTray)
+
+    rc = cli.main(["--config", str(demo_config), "tray"])
+    assert rc == 0
+    assert called == ["init:1", "run"]
