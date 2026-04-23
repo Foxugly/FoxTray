@@ -15,7 +15,7 @@ projects:
     url: http://localhost:4200
     backend:
       path: D:\PycharmProjects\QuizOnline\quizonline-server
-      venv: .venv
+      venv: ..\.venv
       command: python manage.py runserver 8000
       port: 8000
     frontend:
