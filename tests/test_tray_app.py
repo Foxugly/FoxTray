@@ -54,6 +54,7 @@ class _FakeIcon:
 class _FakeOrchestrator:
     next_statuses: dict[str, ProjectStatus] = field(default_factory=dict)
     next_active: state.ActiveProject | None = None
+    pending_starts: set[str] = field(default_factory=set)
 
     def status(self, project: config.Project) -> ProjectStatus:
         return self.next_statuses[project.name]
@@ -78,6 +79,8 @@ def test_poll_tick_sets_icon_to_running_and_notifies(
     state.save(state.State(active=state.ActiveProject(
         name="A", backend_pid=1, frontend_pid=2
     )))
+    # Keep fake PIDs alive so orphan-clear is a no-op inside this tick.
+    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: True)
 
     app._poll_tick()
 
@@ -98,6 +101,8 @@ def test_poll_tick_no_notifications_on_stable_state(
     state.save(state.State(active=state.ActiveProject(
         name="A", backend_pid=1, frontend_pid=2
     )))
+    # Keep fake PIDs alive so orphan-clear is a no-op across both ticks.
+    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: True)
 
     # First tick: transition from baseline (nothing) to running → notify.
     app._poll_tick()
@@ -121,6 +126,8 @@ def test_poll_tick_running_to_partial_notifies_crash(
     state.save(state.State(active=state.ActiveProject(
         name="A", backend_pid=1, frontend_pid=2
     )))
+    # Keep fake PIDs alive so orphan-clear is a no-op across both ticks.
+    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: True)
 
     # Tick 1: both alive → running.
     app._poll_tick()
@@ -153,3 +160,87 @@ def test_poll_tick_survives_orchestrator_exception(
     # Icon unchanged; no notifications fired.
     assert icon.icon is icons.load("stopped")
     assert icon.notifications == []
+
+
+def test_run_calls_clear_if_orphaned(
+    tmp_appdata: Path, monkeypatch: Any
+) -> None:
+    from foxtray import state as state_mod
+    called: list[bool] = []
+    monkeypatch.setattr(state_mod, "clear_if_orphaned", lambda: called.append(True) or False)
+
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(next_statuses={"A": _status()})
+    app = tray.TrayApp(cfg, orch)  # type: ignore[arg-type]
+
+    # We can't actually run pystray in a test. Monkeypatch pystray.Icon to a stub
+    # that immediately returns from .run() so TrayApp.run() finishes.
+    import pystray
+    class _StubIcon:
+        def __init__(self, **kwargs): self._kwargs = kwargs
+        def run(self): return None
+        def notify(self, message, title=""): pass
+        icon = None
+    monkeypatch.setattr(pystray, "Icon", _StubIcon)
+
+    app.run()
+    # clear_if_orphaned is called at least once from run(); the poller may also
+    # fire a tick before the stop event is set, causing a second call — both are fine.
+    assert len(called) >= 1
+
+
+def test_poll_tick_clears_orphan_at_end(
+    tmp_appdata: Path, monkeypatch: Any
+) -> None:
+    cfg = config.Config(projects=[_project("A")])
+    # Both PIDs dead: status() returns both_alive=False, url_ok=False
+    orch = _FakeOrchestrator(next_statuses={"A": _status()})
+    icon = _FakeIcon(icon=icons.load("running"))  # starts as running
+    app = tray.TrayApp(cfg, orch)  # type: ignore[arg-type]
+    app._icon = icon
+    # Seed prev_active so _poll_tick sees a running → stopped transition
+    app._prev_active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
+    app._prev_statuses = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
+    app._prev_icon_state = "running"
+
+    # state.json says A is still active with dead PIDs
+    state.save(state.State(active=state.ActiveProject(
+        name="A", backend_pid=1, frontend_pid=2
+    )))
+    # pid_exists returns False for both → clear_if_orphaned will fire
+    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: False)
+
+    app._poll_tick()
+
+    # The "stopped unexpectedly" balloon should have fired
+    assert any("stopped unexpectedly" in n[1] for n in icon.notifications)
+    # state.json.active is now None
+    assert state.load().active is None
+    # _prev_active was reset after orphan clear
+    assert app._prev_active is None
+
+
+def test_poll_tick_passes_pending_starts_into_compute_transitions(
+    tmp_appdata: Path, monkeypatch: Any
+) -> None:
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(
+        next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
+    )
+    orch.pending_starts.add("A")
+    icon = _FakeIcon(icon=icons.load("stopped"))
+    app = tray.TrayApp(cfg, orch)  # type: ignore[arg-type]
+    app._icon = icon
+    state.save(state.State(active=state.ActiveProject(
+        name="A", backend_pid=1, frontend_pid=2
+    )))
+    # pid_exists True so status() considers procs alive
+    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: True)
+    monkeypatch.setattr("foxtray.project.psutil.pid_exists", lambda pid: True)
+
+    app._poll_tick()
+
+    # Should have fired "A is up" (stopped → running, pending_starts contained A)
+    assert any("A is up" in n[1] for n in icon.notifications)
+    # pending_starts consumed
+    assert orch.pending_starts == set()

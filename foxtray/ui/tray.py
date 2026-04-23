@@ -248,6 +248,7 @@ class TrayApp:
         self._stop_event = threading.Event()
 
     def run(self) -> None:
+        state_mod.clear_if_orphaned()
         self._icon = pystray.Icon(
             name="FoxTray",
             icon=icons.load("stopped"),
@@ -289,7 +290,8 @@ class TrayApp:
             for note in compute_transitions(
                 self._prev_active, self._prev_statuses,
                 curr_active, curr_statuses,
-                suppressed,
+                suppressed=suppressed,
+                pending_starts=self._orchestrator.pending_starts,
             ):
                 self._icon.notify(note.message, title=note.title)
 
@@ -300,6 +302,15 @@ class TrayApp:
 
             self._prev_active = curr_active
             self._prev_statuses = curr_statuses
+
+            # Orphan reconciliation — runs AFTER transition computation so that the
+            # "stopped unexpectedly" balloon still fires for the dying tick.
+            if state_mod.clear_if_orphaned():
+                log.info(
+                    "poll tick cleared orphaned state for %s",
+                    curr_active.name if curr_active else "?",
+                )
+                self._prev_active = None
         except Exception:  # noqa: BLE001 — poll loop must never die
             log.warning("poll tick failed", exc_info=True)
 
