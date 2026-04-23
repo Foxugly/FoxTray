@@ -79,3 +79,11 @@ projects:
 """
     with pytest.raises(config.ConfigError, match="backend"):
         config.load(write_config(tmp_path, body))
+
+
+def test_backend_non_python_command_rejected_at_load_time(tmp_path: Path) -> None:
+    body = SAMPLE_YAML.replace(
+        "python manage.py runserver 8000", "node server.js"
+    )
+    with pytest.raises(config.ConfigError, match="must start with 'python'"):
+        config.load(write_config(tmp_path, body))

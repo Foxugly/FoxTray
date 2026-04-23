@@ -26,7 +26,7 @@ class Backend:
 
     @property
     def resolved_command(self) -> list[str]:
-        parts = shlex.split(self.command, posix=False)
+        parts = shlex.split(self.command)
         if not parts:
             raise ConfigError("backend.command is empty")
         if parts[0].lower() != "python":
@@ -42,7 +42,7 @@ class Frontend:
 
     @property
     def resolved_command(self) -> list[str]:
-        return shlex.split(self.command, posix=False)
+        return shlex.split(self.command)
 
 
 @dataclass(frozen=True)
@@ -71,12 +71,15 @@ def _require(mapping: dict[str, Any], key: str, context: str) -> Any:
 
 
 def _parse_backend(raw: dict[str, Any]) -> Backend:
-    return Backend(
+    backend = Backend(
         path=Path(_require(raw, "path", "backend")),
         venv=_require(raw, "venv", "backend"),
         command=_require(raw, "command", "backend"),
         port=int(_require(raw, "port", "backend")),
     )
+    # Trigger validation-by-construction: resolved_command raises ConfigError if invalid.
+    _ = backend.resolved_command
+    return backend
 
 
 def _parse_frontend(raw: dict[str, Any]) -> Frontend:
