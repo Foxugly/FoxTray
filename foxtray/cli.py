@@ -31,9 +31,18 @@ def cmd_list(args: argparse.Namespace) -> int:
 def cmd_start(args: argparse.Namespace) -> int:
     cfg = config.load(args.config)
     proj = cfg.get(args.name)
-    _orchestrator(cfg).start(proj)
-    print(f"Started {proj.name}")
-    return 0
+    orch = _orchestrator(cfg)
+    orch.start(proj)
+    print(f"Started {proj.name}, waiting for health...")
+    if orch.wait_healthy(proj, timeout=proj.start_timeout):
+        print(f"{proj.name} is healthy")
+        return 0
+    print(
+        f"{proj.name} failed to become healthy within {proj.start_timeout}s; stopping",
+        file=sys.stderr,
+    )
+    orch.stop(proj.name)
+    return 1
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
@@ -111,10 +120,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     args = build_parser().parse_args(argv)
+    state.clear_if_orphaned()
     try:
         return args.func(args)
     except config.ConfigError as exc:
         print(f"Config error: {exc}", file=sys.stderr)
+        return 2
+    except process.PortInUse as exc:
+        print(f"Port in use: {exc}", file=sys.stderr)
         return 2
     except process.ExecutableNotFound as exc:
         print(f"Cannot launch subprocess: {exc}", file=sys.stderr)

@@ -105,3 +105,82 @@ def test_tray_command_parses_and_dispatches(
     rc = cli.main(["--config", str(demo_config), "tray"])
     assert rc == 0
     assert called == ["init:1", "run"]
+
+
+def test_main_calls_clear_if_orphaned_before_dispatch(
+    demo_config: Path, tmp_appdata: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from foxtray import state
+    called: list[bool] = []
+    def _fake_clear() -> bool:
+        called.append(True)
+        return False
+    monkeypatch.setattr(state, "clear_if_orphaned", _fake_clear)
+
+    rc = cli.main(["--config", str(demo_config), "list"])
+    assert rc == 0
+    assert called == [True]
+
+
+def test_cmd_start_prints_healthy_on_success(
+    demo_config: Path,
+    tmp_appdata: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    from foxtray import project as project_mod
+
+    def _fake_start(self, proj): return None
+    def _fake_wait_healthy(self, proj, timeout=30.0, interval=1.0): return True
+
+    monkeypatch.setattr(project_mod.Orchestrator, "start", _fake_start)
+    monkeypatch.setattr(project_mod.Orchestrator, "wait_healthy", _fake_wait_healthy)
+
+    rc = cli.main(["--config", str(demo_config), "start", "Demo"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Started Demo" in out
+    assert "healthy" in out
+
+
+def test_cmd_start_stops_and_returns_1_on_timeout(
+    demo_config: Path,
+    tmp_appdata: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    from foxtray import project as project_mod
+
+    stopped: list[str] = []
+    def _fake_start(self, proj): return None
+    def _fake_wait_healthy(self, proj, timeout=30.0, interval=1.0): return False
+    def _fake_stop(self, name): stopped.append(name)
+
+    monkeypatch.setattr(project_mod.Orchestrator, "start", _fake_start)
+    monkeypatch.setattr(project_mod.Orchestrator, "wait_healthy", _fake_wait_healthy)
+    monkeypatch.setattr(project_mod.Orchestrator, "stop", _fake_stop)
+
+    rc = cli.main(["--config", str(demo_config), "start", "Demo"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "failed to become healthy" in err
+    assert stopped == ["Demo"]
+
+
+def test_cmd_start_maps_port_in_use_to_exit_2(
+    demo_config: Path,
+    tmp_appdata: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    from foxtray import process as process_mod
+    from foxtray import project as project_mod
+
+    def _fake_start(self, proj):
+        raise process_mod.PortInUse("backend port 8000 still in use")
+    monkeypatch.setattr(project_mod.Orchestrator, "start", _fake_start)
+
+    rc = cli.main(["--config", str(demo_config), "start", "Demo"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "8000" in err
