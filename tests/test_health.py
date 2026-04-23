@@ -19,9 +19,26 @@ def tcp_server():
     port = _free_port()
     server = socket.socket()
     server.bind(("127.0.0.1", port))
-    server.listen(1)
-    yield port
-    server.close()
+    server.listen(16)
+    server.settimeout(0.2)
+    stop = threading.Event()
+
+    def _accept_loop() -> None:
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except (socket.timeout, OSError):
+                continue
+            conn.close()
+
+    thread = threading.Thread(target=_accept_loop, daemon=True)
+    thread.start()
+    try:
+        yield port
+    finally:
+        stop.set()
+        server.close()
+        thread.join(timeout=1.0)
 
 
 def test_port_listening_true_when_socket_open(tcp_server: int) -> None:

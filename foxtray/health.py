@@ -8,21 +8,13 @@ import requests
 
 
 def port_listening(port: int, host: str = "127.0.0.1", timeout: float = 0.3) -> bool:
-    """Return True if the given port is bound/listening on *host*.
-
-    Uses a bind-based probe so that the check is reliable on Windows loopback
-    even when the server's accept-backlog is full (a TCP-connect probe would
-    time out rather than succeed in that case, giving a false negative).
-    The *timeout* parameter is accepted for API compatibility but is unused
-    by the bind probe itself, which is instantaneous.
-    """
     with socket.socket() as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(timeout)
         try:
-            sock.bind((host, port))
-            return False  # bind succeeded → nothing is using that port
+            sock.connect((host, port))
         except OSError:
-            return True   # bind failed → port is already in use
+            return False
+        return True
 
 
 def http_ok(url: str, timeout: float = 1.0) -> bool:
