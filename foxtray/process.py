@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import psutil
@@ -55,12 +56,14 @@ def spawn_with_log(
 
     Resolves the command via the same _resolve_command path used by
     ProcessManager.start (so PATHEXT / absolute-path quirks behave the same),
-    closes log_file on Popen failure, and uses the module's _CREATION_FLAGS.
+    closes log_file (success AND failure) so the parent doesn't leak a fd —
+    the child inherits its own duplicated handle via CreateProcess and keeps
+    writing to the log independently. Uses the module's _CREATION_FLAGS.
     Caller owns the Popen's lifecycle.
     """
     try:
         resolved = _resolve_command(command)
-        return subprocess.Popen(
+        popen = subprocess.Popen(
             resolved,
             cwd=str(cwd),
             stdout=log_file,
@@ -70,6 +73,8 @@ def spawn_with_log(
     except Exception:
         log_file.close()
         raise
+    log_file.close()
+    return popen
 
 
 class ProcessManager:
@@ -91,28 +96,57 @@ class ProcessManager:
         return spawn_with_log(command, cwd, log_file)
 
     def kill_tree(self, pid: int, timeout: float = 5.0) -> None:
-        """Terminate the process and every descendant it has."""
+        """Terminate the process and every descendant it has.
+
+        Sweeps ``root.children(recursive=True)`` repeatedly so that descendants
+        spawned *after* the initial snapshot are still caught — the classic
+        ``npm → ng → node.exe`` late-spawn case that leaks orphans when the
+        snapshot is taken only once. Always performs at least two sweeps
+        (empty-after-activity) before declaring the tree quiet. Any survivor
+        from the union of all PIDs seen is then force-killed.
+        """
         try:
             root = psutil.Process(pid)
         except psutil.NoSuchProcess:
             return
 
-        descendants = root.children(recursive=True)
-        victims = [root, *descendants]
+        deadline = time.monotonic() + timeout
+        seen: dict[int, psutil.Process] = {pid: root}
 
-        for proc in victims:
+        max_sweeps = 8
+        for sweep in range(max_sweeps):
+            if time.monotonic() >= deadline:
+                break
             try:
-                proc.terminate()
+                descendants = root.children(recursive=True)
             except psutil.NoSuchProcess:
-                continue
+                descendants = []
+            new_procs = [p for p in descendants if p.pid not in seen]
+            # First sweep always terminates root too; subsequent sweeps terminate
+            # only newly-seen descendants (root is already marked in `seen`).
+            batch = ([root] + new_procs) if sweep == 0 else new_procs
+            for proc in batch:
+                seen.setdefault(proc.pid, proc)
+                try:
+                    proc.terminate()
+                except psutil.NoSuchProcess:
+                    continue
+            psutil.wait_procs(batch, timeout=0.2)
+            # Exit when at least one follow-up sweep has seen no newcomers —
+            # gives a late spawner one window to fire.
+            if sweep >= 1 and not new_procs:
+                break
 
-        _, still_alive = psutil.wait_procs(victims, timeout=timeout)
+        wait_budget = max(deadline - time.monotonic(), 0.5)
+        _, still_alive = psutil.wait_procs(list(seen.values()), timeout=wait_budget)
         for proc in still_alive:
             try:
                 proc.kill()
             except psutil.NoSuchProcess:
                 continue
-        _, unkillable = psutil.wait_procs(still_alive, timeout=timeout)
+        _, unkillable = psutil.wait_procs(
+            still_alive, timeout=max(deadline - time.monotonic(), 0.5)
+        )
         if unkillable:
             log.warning(
                 "kill_tree: %d process(es) survived terminate+kill: %s",

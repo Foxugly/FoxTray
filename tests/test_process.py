@@ -48,6 +48,70 @@ def test_kill_tree_on_missing_pid_is_noop(manager: process.ProcessManager) -> No
     manager.kill_tree(1, timeout=0.5)
 
 
+def test_kill_tree_sweeps_until_no_new_descendants(
+    manager: process.ProcessManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a descendant that appears *after* the initial snapshot must
+    still be terminated. Reproduces the `npm → ng → node` late-spawn scenario
+    deterministically via a fake that reveals the grandchild only on sweep #2.
+    """
+
+    class FakeProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+            self.terminated = False
+            self.killed = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def is_running(self) -> bool:
+            return False
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    late = FakeProc(pid=5002)
+    root = FakeProc(pid=5000)
+
+    class Enumerator:
+        def __init__(self) -> None:
+            self.sweep = 0
+            self.snapshots = [
+                [],          # sweep 1: no descendants yet
+                [late],      # sweep 2: late-spawned grandchild appears
+                [late],      # sweep 3: stable -> loop exits
+                [],          # tail re-enumeration
+            ]
+
+        def children(self, recursive: bool = True) -> list[FakeProc]:
+            snap = self.snapshots[min(self.sweep, len(self.snapshots) - 1)]
+            self.sweep += 1
+            return snap
+
+    root_enum = Enumerator()
+    root.children = root_enum.children  # type: ignore[attr-defined]
+
+    def _process(pid: int) -> FakeProc:
+        if pid == root.pid:
+            return root
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(psutil, "Process", _process)
+    monkeypatch.setattr(psutil, "wait_procs", lambda procs, timeout=None: ([], []))
+
+    manager.kill_tree(root.pid, timeout=5.0)
+
+    assert root.terminated, "root must be terminated"
+    assert late.terminated, (
+        "late-spawned descendant must be terminated on a subsequent sweep — "
+        "kill_tree used to snapshot once and leak late arrivals"
+    )
+
+
 def test_start_returns_popen_and_writes_log(
     manager: process.ProcessManager, tmp_appdata: Path
 ) -> None:
@@ -166,6 +230,28 @@ def test_spawn_with_log_closes_log_file_on_popen_failure(tmp_path: Path) -> None
         )
     # log_file should be closed after the raise
     assert log_file.closed
+
+
+def test_spawn_with_log_closes_parent_fd_on_success(tmp_path: Path) -> None:
+    """The parent's log_file handle must be closed after Popen succeeds.
+    The child inherits its own duplicated handle via CreateProcess, so the
+    parent's reference is a pure leak for the life of the Popen."""
+    from foxtray import process
+
+    log_file = (tmp_path / "out.log").open("w", encoding="utf-8", buffering=1)
+    popen = process.spawn_with_log(
+        [sys.executable, "-c", "print('hello')"],
+        cwd=tmp_path,
+        log_file=log_file,
+    )
+    try:
+        popen.wait(timeout=5)
+    finally:
+        if popen.poll() is None:
+            popen.kill()
+    assert log_file.closed, "parent log_file must be closed after spawn"
+    # Child's writes must still land despite parent-side close.
+    assert "hello" in (tmp_path / "out.log").read_text(encoding="utf-8")
 
 
 def test_process_manager_passes_log_retention_to_rotate(
