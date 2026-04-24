@@ -407,3 +407,8 @@ def test_on_open_log_notifies_when_file_missing(
     icon = _FakeIcon()
     actions.on_open_log(log_path, icon)
     assert any("No log yet" in message for _title, message in icon.notifications)
+
+
+def test_about_body_includes_version() -> None:
+    from foxtray import __version__
+    assert __version__ in actions._ABOUT_BODY

@@ -9,7 +9,7 @@ import webbrowser
 from pathlib import Path
 from typing import Protocol, Sequence
 
-from foxtray import config, tasks
+from foxtray import __version__, config, tasks
 from foxtray.project import Orchestrator
 
 log = logging.getLogger(__name__)
@@ -162,7 +162,7 @@ def on_run_script(
 
 _ABOUT_TITLE = "About FoxTray"
 _ABOUT_BODY = (
-    "FoxTray\n"
+    f"FoxTray v{__version__}\n"
     "Windows tray launcher for Django + Angular project pairs.\n\n"
     "Author: Foxugly\n"
     "Website: https://foxugly.com\n"
