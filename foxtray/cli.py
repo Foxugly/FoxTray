@@ -11,7 +11,13 @@ from foxtray.ui import tray as tray_module
 
 log = logging.getLogger(__name__)
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
+def _default_config_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "config.yaml"
+    return Path(__file__).resolve().parent.parent / "config.yaml"
+
+
+CONFIG_PATH = _default_config_path()
 
 
 def _orchestrator(cfg: config.Config) -> project.Orchestrator:

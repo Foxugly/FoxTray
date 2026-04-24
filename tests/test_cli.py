@@ -338,3 +338,23 @@ projects:
     err = capsys.readouterr().err
     assert rc == 2
     assert "venv python missing" in err
+
+
+def test_default_config_path_uses_exe_dir_when_frozen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from foxtray import cli as cli_mod
+    fake_exe = tmp_path / "FoxTray.exe"
+    fake_exe.write_bytes(b"")
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", str(fake_exe), raising=False)
+    assert cli_mod._default_config_path() == tmp_path / "config.yaml"
+
+
+def test_default_config_path_uses_dev_path_when_not_frozen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from foxtray import cli as cli_mod
+    monkeypatch.delattr("sys.frozen", raising=False)
+    expected = Path(cli_mod.__file__).resolve().parent.parent / "config.yaml"
+    assert cli_mod._default_config_path() == expected

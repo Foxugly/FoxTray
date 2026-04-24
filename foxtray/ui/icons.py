@@ -1,6 +1,7 @@
 """Tray icon images by state, cached once on first load."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -8,9 +9,14 @@ from PIL import Image
 
 IconState = Literal["running", "partial", "stopped"]
 
-# This file sits at `foxtray/ui/icons.py` — three .parent hops reach the repo root.
-# If this file ever moves, adjust the depth to keep _ASSETS pointing at <repo>/assets.
-_ASSETS = Path(__file__).resolve().parent.parent.parent / "assets"
+def _assets_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", str(Path(sys.executable).parent)))
+        return base / "assets"
+    return Path(__file__).resolve().parent.parent.parent / "assets"
+
+
+_ASSETS = _assets_dir()
 
 # Not guarded by a lock. The GIL prevents corruption of the dict, and Image
 # objects are never mutated after creation, so the worst race case is two
