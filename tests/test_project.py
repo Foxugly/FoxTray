@@ -344,3 +344,55 @@ def test_start_calls_wait_port_free_with_3s_timeout(
             psutil.Process(pid).kill()
         except psutil.NoSuchProcess:
             pass
+
+
+def test_status_uses_health_url_when_set(
+    tmp_appdata: Path,
+    sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    custom_url = "http://localhost:9000/health"
+    proj_with_health = config.Project(
+        name=sample_project.name,
+        url=sample_project.url,
+        backend=sample_project.backend,
+        frontend=sample_project.frontend,
+        start_timeout=sample_project.start_timeout,
+        tasks=sample_project.tasks,
+        path_root=sample_project.path_root,
+        health_url=custom_url,
+    )
+    state.save(state.State(active=state.ActiveProject(
+        name=proj_with_health.name, backend_pid=1, frontend_pid=2
+    )))
+    monkeypatch.setattr(project.psutil, "pid_exists", lambda pid: True)
+    captured: list[str] = []
+    def _fake_http_ok(url: str, timeout: float = 1.0) -> bool:
+        captured.append(url)
+        return True
+    monkeypatch.setattr(project.health, "http_ok", _fake_http_ok)
+
+    orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(proj_with_health))
+    orch.status(proj_with_health)
+    assert captured == [custom_url]
+
+
+def test_status_falls_back_to_url_when_no_health_url(
+    tmp_appdata: Path,
+    sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # sample_project has health_url=None
+    state.save(state.State(active=state.ActiveProject(
+        name=sample_project.name, backend_pid=1, frontend_pid=2
+    )))
+    monkeypatch.setattr(project.psutil, "pid_exists", lambda pid: True)
+    captured: list[str] = []
+    def _fake_http_ok(url: str, timeout: float = 1.0) -> bool:
+        captured.append(url)
+        return True
+    monkeypatch.setattr(project.health, "http_ok", _fake_http_ok)
+
+    orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
+    orch.status(sample_project)
+    assert captured == [sample_project.url]

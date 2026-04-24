@@ -132,7 +132,7 @@ class Orchestrator:
             frontend_alive=frontend_alive,
             backend_port_listening=health.port_listening(project.backend.port) if backend_alive else False,
             frontend_port_listening=health.port_listening(project.frontend.port) if frontend_alive else False,
-            url_ok=health.http_ok(project.url) if (backend_alive and frontend_alive) else False,
+            url_ok=health.http_ok(project.health_url or project.url) if (backend_alive and frontend_alive) else False,
         )
 
     def wait_healthy(
