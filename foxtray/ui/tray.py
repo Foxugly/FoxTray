@@ -364,11 +364,36 @@ class TrayApp:
         )
         poller = threading.Thread(target=self._poll_loop, name="foxtray-poller", daemon=True)
         poller.start()
+        self._schedule_auto_start()
         try:
             self._icon.run()
         finally:
             self._stop_event.set()
             poller.join(timeout=_POLL_INTERVAL_S + 1.0)
+
+    def _schedule_auto_start(self) -> None:
+        if self._cfg.auto_start is None:
+            return
+        if state_mod.load().active is not None:
+            return
+        project = next(
+            (p for p in self._cfg.projects if p.name == self._cfg.auto_start), None
+        )
+        if project is None:
+            log.warning("auto_start references unknown project %r", self._cfg.auto_start)
+            return
+        threading.Thread(
+            target=self._auto_start_project, args=(project,),
+            name=f"auto-start-{project.name}", daemon=True,
+        ).start()
+
+    def _auto_start_project(self, project: config_mod.Project) -> None:
+        self._orchestrator.pending_starts.add(project.name)
+        try:
+            self._orchestrator.start(project)
+        except Exception:  # noqa: BLE001
+            self._orchestrator.pending_starts.discard(project.name)
+            log.warning("auto_start failed for %s", project.name, exc_info=True)
 
     def _poll_loop(self) -> None:
         while not self._stop_event.is_set():

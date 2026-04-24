@@ -340,3 +340,81 @@ def test_poll_tick_updates_icon_title_with_status(
     assert hasattr(icon, "title")
     assert "RUNNING" in icon.title
     assert "A" in icon.title
+
+
+def test_run_schedules_auto_start_when_configured(
+    tmp_appdata: Path, monkeypatch: Any
+) -> None:
+    cfg = config.Config(
+        projects=[_project("A")],
+        auto_start="A",
+    )
+
+    started: list[str] = []
+
+    class _OrchStub:
+        pending_starts: set[str] = set()
+        def start(self, project): started.append(project.name)
+        def stop(self, name): ...
+        def stop_all(self): ...
+        def status(self, project): ...
+
+    import pystray
+    class _StubIcon:
+        def __init__(self, **kwargs): pass
+        def run(self): return None
+        def notify(self, message, title=""): pass
+        icon = None
+        title = "FoxTray"
+
+    monkeypatch.setattr(pystray, "Icon", _StubIcon)
+
+    app = tray.TrayApp(cfg, _OrchStub(), _StubProcessManager())  # type: ignore[arg-type]
+    app.run()
+
+    # The auto-start thread is a daemon; give it a moment to run
+    import time
+    deadline = time.monotonic() + 1.0
+    while not started and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert started == ["A"]
+
+
+def test_run_skips_auto_start_when_active_project_exists(
+    tmp_appdata: Path, monkeypatch: Any
+) -> None:
+    cfg = config.Config(
+        projects=[_project("A")],
+        auto_start="A",
+    )
+    # Seed an active project
+    state.save(state.State(active=state.ActiveProject(
+        name="A", backend_pid=1, frontend_pid=2
+    )))
+
+    started: list[str] = []
+
+    class _OrchStub:
+        pending_starts: set[str] = set()
+        def start(self, project): started.append(project.name)
+        def stop(self, name): ...
+        def stop_all(self): ...
+        def status(self, project): ...
+
+    import pystray
+    class _StubIcon:
+        def __init__(self, **kwargs): pass
+        def run(self): return None
+        def notify(self, message, title=""): pass
+        icon = None
+        title = "FoxTray"
+    monkeypatch.setattr(pystray, "Icon", _StubIcon)
+    # Make clear_if_orphaned think the PIDs are alive so state is preserved
+    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: True)
+
+    app = tray.TrayApp(cfg, _OrchStub(), _StubProcessManager())  # type: ignore[arg-type]
+    app.run()
+
+    import time
+    time.sleep(0.3)
+    assert started == []
