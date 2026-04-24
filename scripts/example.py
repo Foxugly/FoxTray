@@ -4,6 +4,6 @@ from tkinter import messagebox
 root = tk.Tk()
 root.withdraw()
 
-messagebox.showinfo("Titre", "Hello 👋 Sample demo")
+messagebox.showinfo("Foxtray", "Hello 👋 Sample demo")
 
 root.destroy()
