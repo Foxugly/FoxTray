@@ -36,6 +36,7 @@ class MenuItemSpec:
     enabled: bool = True
     submenu: tuple[MenuItemSpec, ...] = field(default_factory=tuple)
     separator: bool = False
+    checked: Callable[[], bool] | None = None
 
 
 @dataclass
@@ -57,6 +58,7 @@ class Handlers:
     on_open_logs_folder: Callable[[], None]
     on_copy_url: Callable[[str], None]
     on_open_log: Callable[[Path], None]
+    on_toggle_autostart: Callable[[], None]
 
 
 def _status_to_icon_state(status: ProjectStatus) -> IconState:
@@ -298,7 +300,13 @@ def build_menu_items(
             enabled=active is not None,
         )
     )
+    from foxtray import autostart as autostart_mod
     items.append(MenuItemSpec(text="", separator=True))
+    items.append(MenuItemSpec(
+        text="Start at login",
+        action=handlers.on_toggle_autostart,
+        checked=lambda: autostart_mod.is_enabled(),
+    ))
     items.append(MenuItemSpec(text="About", action=handlers.on_about))
     return items
 
@@ -533,6 +541,7 @@ class TrayApp:
             on_open_logs_folder=lambda: actions.on_open_logs_folder(icon),
             on_copy_url=lambda url: actions.on_copy_url(url, icon),
             on_open_log=lambda path: actions.on_open_log(path, icon),
+            on_toggle_autostart=lambda: actions.on_toggle_autostart(icon),
         )
 
 
@@ -558,6 +567,13 @@ def _spec_to_pystray(spec: MenuItemSpec) -> pystray.MenuItem:
             enabled=spec.enabled,
         )
     action = spec.action if spec.action is not None else (lambda: None)
+    if spec.checked is not None:
+        return pystray.MenuItem(
+            spec.text,
+            lambda _icon, _item: action(),
+            enabled=spec.enabled,
+            checked=lambda _item, c=spec.checked: c(),
+        )
     return pystray.MenuItem(
         spec.text,
         lambda _icon, _item: action(),

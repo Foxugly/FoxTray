@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 import threading
 import webbrowser
 from pathlib import Path
@@ -232,5 +233,24 @@ def on_open_log(log_path: Path, icon: Notifier) -> None:
             icon.notify(f"No log yet: {log_path.name}", title="FoxTray")
             return
         _open_folder_native(log_path)
+    except Exception as exc:  # noqa: BLE001
+        _notify_error(icon, exc)
+
+
+def on_toggle_autostart(icon: Notifier) -> None:
+    from foxtray import autostart
+    if not getattr(sys, "frozen", False):
+        icon.notify(
+            "Autostart only works for the packaged .exe (dev mode skipped)",
+            title="FoxTray",
+        )
+        return
+    try:
+        if autostart.is_enabled():
+            autostart.disable()
+            icon.notify("Autostart disabled", title="FoxTray")
+        else:
+            autostart.enable(Path(sys.executable))
+            icon.notify("Autostart enabled", title="FoxTray")
     except Exception as exc:  # noqa: BLE001
         _notify_error(icon, exc)

@@ -412,3 +412,52 @@ def test_on_open_log_notifies_when_file_missing(
 def test_about_body_includes_version() -> None:
     from foxtray import __version__
     assert __version__ in actions._ABOUT_BODY
+
+
+def test_on_toggle_autostart_enables_when_currently_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from foxtray import autostart
+    enabled_calls: list[Path] = []
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", r"C:\fake\FoxTray.exe", raising=False)
+    monkeypatch.setattr(autostart, "is_enabled", lambda: False)
+    monkeypatch.setattr(autostart, "enable", enabled_calls.append)
+    monkeypatch.setattr(autostart, "disable", lambda: None)
+
+    icon = _FakeIcon()
+    actions.on_toggle_autostart(icon)
+    assert enabled_calls == [Path(r"C:\fake\FoxTray.exe")]
+    assert any("enabled" in message for _title, message in icon.notifications)
+
+
+def test_on_toggle_autostart_disables_when_currently_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from foxtray import autostart
+    disable_calls: list[bool] = []
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr(autostart, "is_enabled", lambda: True)
+    monkeypatch.setattr(autostart, "enable", lambda p: None)
+    monkeypatch.setattr(autostart, "disable", lambda: disable_calls.append(True))
+
+    icon = _FakeIcon()
+    actions.on_toggle_autostart(icon)
+    assert disable_calls == [True]
+    assert any("disabled" in message for _title, message in icon.notifications)
+
+
+def test_on_toggle_autostart_noop_when_not_frozen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from foxtray import autostart
+    called: list[bool] = []
+    monkeypatch.delattr("sys.frozen", raising=False)
+    monkeypatch.setattr(autostart, "is_enabled", lambda: False)
+    monkeypatch.setattr(autostart, "enable", lambda p: called.append(True))
+    monkeypatch.setattr(autostart, "disable", lambda: called.append(True))
+
+    icon = _FakeIcon()
+    actions.on_toggle_autostart(icon)
+    assert called == []
+    assert any("packaged" in message for _title, message in icon.notifications)

@@ -179,6 +179,7 @@ def _noop_handlers() -> tray.Handlers:
         on_open_logs_folder=lambda: None,
         on_copy_url=lambda u: None,
         on_open_log=lambda path: None,
+        on_toggle_autostart=lambda: None,
     )
 
 
@@ -420,6 +421,7 @@ def _noop_handlers_with_tasks() -> tray.Handlers:
         on_open_logs_folder=lambda: None,
         on_copy_url=lambda u: None,
         on_open_log=lambda path: None,
+        on_toggle_autostart=lambda: None,
     )
 
 
@@ -605,3 +607,16 @@ def test_menu_project_has_open_backend_log_entry() -> None:
     submenu_texts = [s.text for s in items[0].submenu]
     assert "Open backend log" in submenu_texts
     assert "Open frontend log" in submenu_texts
+
+
+def test_menu_has_start_at_login_entry() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers(),
+        running_tasks=set(),
+    )
+    non_sep = [i for i in items if not i.separator]
+    texts = [i.text for i in non_sep]
+    assert "Start at login" in texts
+    # Placed BEFORE About
+    assert texts.index("Start at login") < texts.index("About")
