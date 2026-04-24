@@ -69,3 +69,7 @@ def test_rotate_task_moves_existing_log_to_dot1(tmp_appdata: Path) -> None:
     rotated = paths.appdata_root() / "logs" / "tasks" / "script_Git pull all.log.1"
     assert rotated.exists()
     assert "first run" in rotated.read_text(encoding="utf-8")
+
+
+def test_logs_dir_returns_appdata_logs(tmp_appdata: Path) -> None:
+    assert paths.logs_dir() == paths.appdata_root() / "logs"
