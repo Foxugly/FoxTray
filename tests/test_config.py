@@ -314,3 +314,76 @@ def test_project_path_root_rejects_relative(tmp_path: Path) -> None:
     yaml_body = SAMPLE_YAML.rstrip() + "\n    path_root: relative/path\n"
     with pytest.raises(config.ConfigError, match="absolute"):
         config.load(write_config(tmp_path, yaml_body))
+
+
+import os
+
+
+def test_backend_path_expands_environment_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FOX_ROOT", "D:\\roots\\foxrunner")
+    yaml_body = SAMPLE_YAML.replace(
+        "path: D:\\\\projects\\\\foxrunner-server",
+        "path: ${FOX_ROOT}",
+    )
+    cfg = config.load(write_config(tmp_path, yaml_body))
+    assert cfg.projects[0].backend.path == Path("D:\\roots\\foxrunner")
+
+
+def test_script_path_expands_environment_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SCRIPT_HOME", "D:\\scripts")
+    yaml_body = (
+        SAMPLE_YAML.rstrip()
+        + "\nscripts:\n"
+        + "  - name: Example\n"
+        + "    path: ${SCRIPT_HOME}\\migrate\n"
+        + "    command: python one_off.py\n"
+    )
+    cfg = config.load(write_config(tmp_path, yaml_body))
+    assert cfg.scripts[0].path == Path("D:\\scripts\\migrate")
+
+
+def test_path_root_expands_environment_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("REPOS", "D:\\repos")
+    yaml_body = SAMPLE_YAML.rstrip() + "\n    path_root: ${REPOS}\\FoxRunner\n"
+    cfg = config.load(write_config(tmp_path, yaml_body))
+    assert cfg.projects[0].path_root == Path("D:\\repos\\FoxRunner")
+
+
+def test_project_without_health_url_defaults_none(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, SAMPLE_YAML))
+    assert cfg.projects[0].health_url is None
+
+
+def test_project_health_url_parsed_when_provided(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + "\n    health_url: http://localhost:8000/health\n"
+    cfg = config.load(write_config(tmp_path, yaml_body))
+    assert cfg.projects[0].health_url == "http://localhost:8000/health"
+
+
+def test_project_health_url_rejects_empty_string(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + '\n    health_url: ""\n'
+    with pytest.raises(config.ConfigError, match="health_url"):
+        config.load(write_config(tmp_path, yaml_body))
+
+
+def test_config_without_auto_start_defaults_none(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, SAMPLE_YAML))
+    assert cfg.auto_start is None
+
+
+def test_config_auto_start_accepts_existing_project_name(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + "\n\nauto_start: FoxRunner\n"
+    cfg = config.load(write_config(tmp_path, yaml_body))
+    assert cfg.auto_start == "FoxRunner"
+
+
+def test_config_auto_start_rejects_unknown_project_name(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + "\n\nauto_start: NopeProject\n"
+    with pytest.raises(config.ConfigError, match="auto_start"):
+        config.load(write_config(tmp_path, yaml_body))

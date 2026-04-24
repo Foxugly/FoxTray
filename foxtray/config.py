@@ -1,6 +1,7 @@
 """Config loading and validation for FoxTray."""
 from __future__ import annotations
 
+import os
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,6 +81,7 @@ class Project:
     start_timeout: int = 30
     tasks: tuple[Task, ...] = ()
     path_root: Path | None = None
+    health_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,12 +104,17 @@ class Script:
 class Config:
     projects: list[Project] = field(default_factory=list)
     scripts: tuple[Script, ...] = ()
+    auto_start: str | None = None
 
     def get(self, name: str) -> Project:
         for project in self.projects:
             if project.name == name:
                 return project
         raise ProjectNotFound(name)
+
+
+def _expand_path(raw: str) -> Path:
+    return Path(os.path.expandvars(raw))
 
 
 def _require(mapping: dict[str, Any], key: str, context: str) -> Any:
@@ -118,7 +125,7 @@ def _require(mapping: dict[str, Any], key: str, context: str) -> Any:
 
 def _parse_backend(raw: dict[str, Any]) -> Backend:
     backend = Backend(
-        path=Path(_require(raw, "path", "backend")),
+        path=_expand_path(_require(raw, "path", "backend")),
         venv=_require(raw, "venv", "backend"),
         command=_require(raw, "command", "backend"),
         port=int(_require(raw, "port", "backend")),
@@ -130,7 +137,7 @@ def _parse_backend(raw: dict[str, Any]) -> Backend:
 
 def _parse_frontend(raw: dict[str, Any]) -> Frontend:
     return Frontend(
-        path=Path(_require(raw, "path", "frontend")),
+        path=_expand_path(_require(raw, "path", "frontend")),
         command=_require(raw, "command", "frontend"),
         port=int(_require(raw, "port", "frontend")),
     )
@@ -179,11 +186,16 @@ def _parse_project(raw: dict[str, Any]) -> Project:
     path_root_raw = raw.get("path_root")
     path_root: Path | None = None
     if path_root_raw is not None:
-        path_root = Path(path_root_raw)
+        path_root = _expand_path(path_root_raw)
         if not path_root.is_absolute():
             raise ConfigError(
                 f"project {name!r}: path_root must be absolute, got {path_root_raw!r}"
             )
+    health_url_raw = raw.get("health_url")
+    if health_url_raw is not None and (not isinstance(health_url_raw, str) or not health_url_raw):
+        raise ConfigError(
+            f"project {name!r}: health_url must be a non-empty string if present"
+        )
     return Project(
         name=name,
         url=_require(raw, "url", f"project {name!r}"),
@@ -192,6 +204,7 @@ def _parse_project(raw: dict[str, Any]) -> Project:
         start_timeout=start_timeout_raw,
         tasks=tasks,
         path_root=path_root,
+        health_url=health_url_raw,
     )
 
 
@@ -202,7 +215,7 @@ def _parse_script(raw: dict[str, Any]) -> Script:
     if not isinstance(name, str) or not name:
         raise ConfigError("script name must be a non-empty string")
     path_raw = _require(raw, "path", f"script {name!r}")
-    path = Path(path_raw)
+    path = _expand_path(path_raw)
     if not path.is_absolute():
         raise ConfigError(f"script {name!r}: path must be absolute, got {path_raw!r}")
     command = _require(raw, "command", f"script {name!r}")
@@ -233,4 +246,12 @@ def load(path: Path) -> Config:
     dup_scripts = {n for n in script_names if script_names.count(n) > 1}
     if dup_scripts:
         raise ConfigError(f"duplicate script names: {sorted(dup_scripts)}")
-    return Config(projects=projects, scripts=scripts)
+    auto_start_raw = raw.get("auto_start")
+    if auto_start_raw is not None:
+        if not isinstance(auto_start_raw, str) or not auto_start_raw:
+            raise ConfigError("auto_start must be a non-empty string if present")
+        if auto_start_raw not in [p.name for p in projects]:
+            raise ConfigError(
+                f"auto_start references unknown project {auto_start_raw!r}"
+            )
+    return Config(projects=projects, scripts=scripts, auto_start=auto_start_raw)
