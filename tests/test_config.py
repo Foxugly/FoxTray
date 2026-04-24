@@ -297,3 +297,20 @@ def test_script_rejects_empty_venv_string(tmp_path: Path) -> None:
     yaml = SCRIPTS_YAML.replace("venv: .venv", 'venv: ""')
     with pytest.raises(config.ConfigError, match="venv"):
         config.load(write_config(tmp_path, yaml))
+
+
+def test_project_without_path_root_defaults_none(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, SAMPLE_YAML))
+    assert cfg.projects[0].path_root is None
+
+
+def test_project_path_root_accepts_absolute(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + "\n    path_root: D:\\\\projects\\\\foxrunner\n"
+    cfg = config.load(write_config(tmp_path, yaml_body))
+    assert cfg.projects[0].path_root == Path("D:\\projects\\foxrunner")
+
+
+def test_project_path_root_rejects_relative(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + "\n    path_root: relative/path\n"
+    with pytest.raises(config.ConfigError, match="absolute"):
+        config.load(write_config(tmp_path, yaml_body))

@@ -79,6 +79,7 @@ class Project:
     frontend: Frontend
     start_timeout: int = 30
     tasks: tuple[Task, ...] = ()
+    path_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,14 @@ def _parse_project(raw: dict[str, Any]) -> Project:
         raise ConfigError(
             f"project {name!r}: duplicate task names: {sorted(duplicate_tasks)}"
         )
+    path_root_raw = raw.get("path_root")
+    path_root: Path | None = None
+    if path_root_raw is not None:
+        path_root = Path(path_root_raw)
+        if not path_root.is_absolute():
+            raise ConfigError(
+                f"project {name!r}: path_root must be absolute, got {path_root_raw!r}"
+            )
     return Project(
         name=name,
         url=_require(raw, "url", f"project {name!r}"),
@@ -182,6 +191,7 @@ def _parse_project(raw: dict[str, Any]) -> Project:
         frontend=_parse_frontend(_require(raw, "frontend", f"project {name!r}")),
         start_timeout=start_timeout_raw,
         tasks=tasks,
+        path_root=path_root,
     )
 
 
