@@ -7,8 +7,27 @@ import time
 import requests
 
 
-def port_listening(port: int, host: str = "127.0.0.1", timeout: float = 0.3) -> bool:
-    with socket.socket() as sock:
+def port_listening(port: int, host: str | None = None, timeout: float = 0.3) -> bool:
+    """Check whether the given port is bound on localhost.
+
+    When host is None (default), try IPv4 127.0.0.1 and IPv6 ::1 in order and
+    return True if EITHER responds. Some dev servers (recent Angular, Vite)
+    bind IPv6-only even when the URL says "localhost", so a 127.0.0.1-only
+    probe incorrectly reports "not listening" while the HTTP URL works.
+
+    When host is set explicitly (e.g., to check a remote or a specific
+    family), only that host is probed.
+    """
+    if host is not None:
+        return _probe(host, port, timeout)
+    # Default: IPv4 first (the common case), then IPv6.
+    return _probe("127.0.0.1", port, timeout) or _probe("::1", port, timeout)
+
+
+def _probe(host: str, port: int, timeout: float) -> bool:
+    # socket.AF_INET6 is required for "::1", AF_INET for "127.0.0.1".
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
         sock.settimeout(timeout)
         try:
             sock.connect((host, port))

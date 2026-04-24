@@ -84,3 +84,50 @@ def test_wait_port_free_returns_false_when_still_listening(tcp_server: int) -> N
     start = time.monotonic()
     assert health.wait_port_free(tcp_server, timeout=0.3) is False
     assert time.monotonic() - start >= 0.3
+
+
+@pytest.fixture
+def tcp_server_ipv6():
+    """IPv6-only TCP server, to model Angular dev-server binding ::1 only."""
+    # Find a free port by binding IPv6
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+        s.bind(("::1", 0))
+        port = s.getsockname()[1]
+    server = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    server.bind(("::1", port))
+    server.listen(16)
+    server.settimeout(0.2)
+    stop = threading.Event()
+
+    def _accept_loop() -> None:
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except (socket.timeout, OSError):
+                continue
+            conn.close()
+
+    thread = threading.Thread(target=_accept_loop, daemon=True)
+    thread.start()
+    try:
+        yield port
+    finally:
+        stop.set()
+        server.close()
+        thread.join(timeout=1.0)
+
+
+def test_port_listening_true_for_ipv6_only_binding(tcp_server_ipv6: int) -> None:
+    # Default host=None should try IPv4 first (nothing there), then IPv6 (our server) → True
+    assert health.port_listening(tcp_server_ipv6) is True
+
+
+def test_port_listening_explicit_ipv4_ignores_ipv6_server(
+    tcp_server_ipv6: int,
+) -> None:
+    # Explicit IPv4 host does NOT fall back to IPv6
+    assert health.port_listening(tcp_server_ipv6, host="127.0.0.1") is False
+
+
+def test_port_listening_explicit_ipv6_host(tcp_server_ipv6: int) -> None:
+    assert health.port_listening(tcp_server_ipv6, host="::1") is True
