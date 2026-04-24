@@ -241,3 +241,100 @@ def test_cmd_tray_releases_lock_even_when_trayapp_raises(
     with pytest.raises(RuntimeError, match="mid-run crash"):
         cli.main(["--config", str(demo_config), "tray"])
     assert released == [True]
+
+
+def test_cmd_validate_exits_0_on_clean_config(
+    tmp_path: Path, tmp_appdata: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    # Build a config where all paths exist
+    backend_dir = tmp_path / "back"
+    frontend_dir = tmp_path / "front"
+    venv_scripts = backend_dir / ".venv" / "Scripts"
+    backend_dir.mkdir()
+    frontend_dir.mkdir()
+    venv_scripts.mkdir(parents=True)
+    (venv_scripts / "python.exe").write_bytes(b"")  # dummy file to make exists() True
+
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(
+        f"""
+projects:
+  - name: X
+    url: http://127.0.0.1:9
+    backend:
+      path: {str(backend_dir).replace(chr(92), chr(92) + chr(92))}
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+    frontend:
+      path: {str(frontend_dir).replace(chr(92), chr(92) + chr(92))}
+      command: ng serve --port 4200
+      port: 4200
+""",
+        encoding="utf-8",
+    )
+    rc = cli.main(["--config", str(cfg_path), "validate"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "OK" in out
+
+
+def test_cmd_validate_exits_2_on_missing_backend_path(
+    tmp_path: Path, tmp_appdata: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(
+        """
+projects:
+  - name: X
+    url: http://127.0.0.1:9
+    backend:
+      path: D:\\\\nonexistent_backend_xyz
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+    frontend:
+      path: D:\\\\nonexistent_frontend_xyz
+      command: ng serve --port 4200
+      port: 4200
+""",
+        encoding="utf-8",
+    )
+    rc = cli.main(["--config", str(cfg_path), "validate"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "backend.path does not exist" in err
+    assert "frontend.path does not exist" in err
+
+
+def test_cmd_validate_exits_2_on_missing_venv_python(
+    tmp_path: Path, tmp_appdata: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    backend_dir = tmp_path / "back"
+    frontend_dir = tmp_path / "front"
+    backend_dir.mkdir()
+    frontend_dir.mkdir()
+    # No .venv inside backend_dir
+
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text(
+        f"""
+projects:
+  - name: X
+    url: http://127.0.0.1:9
+    backend:
+      path: {str(backend_dir).replace(chr(92), chr(92) + chr(92))}
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+    frontend:
+      path: {str(frontend_dir).replace(chr(92), chr(92) + chr(92))}
+      command: ng serve --port 4200
+      port: 4200
+""",
+        encoding="utf-8",
+    )
+    rc = cli.main(["--config", str(cfg_path), "validate"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "venv python missing" in err

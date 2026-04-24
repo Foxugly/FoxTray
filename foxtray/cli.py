@@ -94,6 +94,37 @@ def cmd_tray(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_validate(args: argparse.Namespace) -> int:
+    try:
+        cfg = config.load(args.config)
+    except config.ConfigError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        return 2
+
+    issues: list[str] = []
+    for proj in cfg.projects:
+        if not proj.backend.path.exists():
+            issues.append(f"{proj.name}: backend.path does not exist: {proj.backend.path}")
+        elif not proj.backend.python_executable.exists():
+            issues.append(
+                f"{proj.name}: backend venv python missing: {proj.backend.python_executable}"
+            )
+        if not proj.frontend.path.exists():
+            issues.append(f"{proj.name}: frontend.path does not exist: {proj.frontend.path}")
+        if proj.path_root is not None and not proj.path_root.exists():
+            issues.append(f"{proj.name}: path_root does not exist: {proj.path_root}")
+    for script in cfg.scripts:
+        if not script.path.exists():
+            issues.append(f"script {script.name!r}: path does not exist: {script.path}")
+
+    if issues:
+        for issue in issues:
+            print(issue, file=sys.stderr)
+        return 2
+    print(f"Config OK: {len(cfg.projects)} project(s), {len(cfg.scripts)} script(s)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="foxtray")
     parser.add_argument(
@@ -123,6 +154,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "tray", help="Run FoxTray as a Windows tray icon"
     ).set_defaults(func=cmd_tray)
+
+    sub.add_parser(
+        "validate",
+        help="Validate config.yaml — paths, venvs, script targets",
+    ).set_defaults(func=cmd_validate)
 
     return parser
 
