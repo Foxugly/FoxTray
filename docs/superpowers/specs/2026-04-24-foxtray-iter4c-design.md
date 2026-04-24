@@ -1,124 +1,197 @@
-# FoxTray Iter 4c — PyInstaller .exe Packaging Design (Skeleton)
-
-> **Status:** design outline only. No implementation plan yet — requires a follow-up brainstorming session to lock decisions on open questions before writing `docs/superpowers/plans/…-foxtray-iter4c.md`.
+# FoxTray Iter 4c — PyInstaller .exe Packaging Design
 
 ## Goal
 
-Ship FoxTray as a standalone `FoxTray.exe` that runs without requiring the end user to install Python or pip dependencies. The `.exe` bundles the interpreter, `pystray`, `Pillow`, `PyYAML`, `psutil`, `requests`, and the `foxtray` package + `assets/`.
+Produce a standalone `FoxTray.exe` that runs without requiring end users to install Python, pip dependencies, or manage a venv. Target: drop `FoxTray.exe` next to a `config.yaml` and launch.
 
-Target: one binary the user drops next to their `config.yaml` (or at a well-known location) and launches.
-
-## Non-goals (for Iter 4c)
+## Non-goals
 
 - Installer (MSI / NSIS) — out of scope; the `.exe` is standalone.
-- Code signing — deferred (needs a certificate + CI secrets).
-- Auto-update — Iter 4e.
-- macOS / Linux binaries — Iter 4c is Windows-only.
-- Portable mode with side-by-side `%APPDATA%` override — possibly later.
+- Code signing — deferred.
+- Auto-update — Iter 4e (which is deferred anyway).
+- macOS / Linux binaries — Windows-only.
+
+## Decisions (resolved from 4c skeleton open questions)
+
+1. **One-file mode** (`--onefile`). Single `FoxTray.exe` (~30 MB). Startup cost (~500ms unpack to temp) is acceptable.
+2. **`config.yaml` default resolved next to the `.exe`** when `sys.frozen` is True. In dev mode, unchanged (`Path(__file__).parent.parent / "config.yaml"`).
+3. **`state.json`, `tray.lock`, logs** stay in `%APPDATA%\foxtray\` — unchanged.
+4. **Icon for the .exe**: auto-generate a `.ico` file via `scripts/gen_icons.py`. Pillow supports saving multi-resolution ICO (16/32/48/256).
+5. **Version**: hardcoded `__version__ = "0.4.0"` in `foxtray/__init__.py`. About dialog shows it. Bump manually on releases.
+6. **Antivirus**: document as a known limitation. UPX disabled (`--noupx` in spec) to reduce false-positive probability.
+7. **Testing**: unit tests monkeypatch `sys.frozen`/`sys._MEIPASS` to verify path resolution. Manual smoke test builds the exe and verifies it launches.
 
 ## Architecture overview
 
-PyInstaller in **one-file mode** (`--onefile`) is the starting candidate. Tradeoffs:
-- **One-file**: single `FoxTray.exe` (~30 MB). Unpacks to a temp dir on each launch, adds ~500ms startup. Simpler distribution.
-- **One-folder** (`--onedir`): `FoxTray/` directory with `FoxTray.exe` + DLLs + `_internal/`. Faster startup, but the user has to distribute the whole folder.
+### Entry point
 
-Default recommendation: **one-file** for ergonomics; revisit if the startup lag bothers us.
+`main.py` already exists and is PyInstaller-compatible. We'll point the spec file at it.
 
-### Entry point and spec file
+### Spec file
 
-PyInstaller requires a `.spec` file to describe the build. Create `foxtray.spec` at repo root:
+`foxtray.spec` at repo root describes the build:
 
 ```python
-# foxtray.spec — PyInstaller config
+# -*- mode: python ; coding: utf-8 -*-
+
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets/*.png', 'assets')],  # bundle tray icons
-    hiddenimports=['PIL._tkinter_finder'],  # PyInstaller sometimes misses Pillow extras
-    ...
+    datas=[
+        ('assets', 'assets'),  # bundle the icons folder
+    ],
+    hiddenimports=[],
+    hookspath=[],
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
 )
-pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, a.binaries, a.datas, ...,
-          name='FoxTray', icon='assets/icon_running.png', console=False)
-```
 
-`console=False` so the `.exe` launches without a console window.
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name='FoxTray',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,  # UPX triggers false positives in many AV engines
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,  # No console window when running the tray
+    disable_windowed_traceback=False,
+    icon='assets/foxtray.ico',
+)
+```
 
 ### Path resolution inside bundled `.exe`
 
-`foxtray/ui/icons.py` currently does:
+PyInstaller extracts bundled data to `sys._MEIPASS` at runtime. We need to handle:
+
+**`foxtray/ui/icons.py`** — currently:
 ```python
 _ASSETS = Path(__file__).resolve().parent.parent.parent / "assets"
 ```
 
-In a PyInstaller bundle, `__file__` points into a temp extraction dir (`_MEIPASS`). The `assets/` we bundle goes to `sys._MEIPASS / "assets"`. Update the resolver:
-
+Update to a function-based resolver that checks `sys._MEIPASS`:
 ```python
 def _assets_dir() -> Path:
-    if hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS) / "assets"
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        return base / "assets"
     return Path(__file__).resolve().parent.parent.parent / "assets"
+
+
+_ASSETS = _assets_dir()
 ```
 
-Equivalent change needed anywhere else we use a "project-root-relative" path (check `foxtray/paths.py`, `foxtray/cli.py` `CONFIG_PATH` default, etc).
+`_ASSETS` evaluated at import time is fine because it's computed inside the function.
 
-### Config path in bundled mode
+**`foxtray/cli.py`** — the default `--config` path:
+```python
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
+```
 
-`foxtray/cli.py` defaults `--config` to `Path(__file__).resolve().parent.parent / "config.yaml"` — which in a bundle points into `_MEIPASS`. That's wrong. Options:
-1. **Require `--config`** when running the `.exe` (no default).
-2. **Resolve config relative to the `.exe` location** (next to the binary the user drops on disk).
-3. **Resolve config from `%APPDATA%\foxtray\config.yaml`** with a "first run" step that writes a template.
+When frozen, this points into `_MEIPASS` — wrong. Update:
+```python
+def _default_config_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "config.yaml"
+    return Path(__file__).resolve().parent.parent / "config.yaml"
 
-Lean toward **(2)**: `config.yaml` sits next to `FoxTray.exe`. Simple mental model, no magic hidden state.
 
-Implementation: when `sys.frozen` is True, default `--config` to `Path(sys.executable).parent / "config.yaml"`.
+CONFIG_PATH = _default_config_path()
+```
+
+### Icon file generation
+
+`scripts/gen_icons.py` already generates the 3 tray PNGs. Extend it to also generate `assets/foxtray.ico` — Pillow's `Image.save(path, format="ICO", sizes=[(16,16),(32,32),(48,48),(256,256)])` handles multi-resolution.
+
+Source image: reuse `icon_running.png` (green disc). Good enough for v1.
 
 ### Build invocation
 
-New `scripts/build_exe.py` or a Makefile-style doc. Canonical command:
-
-```powershell
-pyinstaller --clean --noconfirm foxtray.spec
-```
-
-Output lands in `dist/FoxTray.exe`.
-
-### Dependencies
-
-Add to `requirements-dev.txt` (not `requirements.txt` — runtime has no need of PyInstaller):
+Add `requirements-dev.txt`:
 ```
 pyinstaller>=6.0
 ```
 
-## Open questions (to resolve in brainstorming)
+Document the build command in `docs/packaging.md`:
+```
+./.venv/Scripts/python.exe scripts/gen_icons.py       # ensure .ico exists
+./.venv/Scripts/python.exe -m PyInstaller --clean --noconfirm foxtray.spec
+```
 
-1. **One-file vs one-folder?** Default proposal: one-file. User might prefer one-folder for faster startup or easier antivirus whitelist management.
-2. **Where does `config.yaml` live by default?** Option 2 above (next to `.exe`) vs %APPDATA%. Probably option 2 but confirm.
-3. **Should `state.json` and `logs/` remain in `%APPDATA%\foxtray\`?** Yes — they're per-user runtime data. Unchanged from current behavior.
-4. **Icon for the `.exe` itself (Windows Explorer view)?** We have `assets/icon_running.png` (32×32 colored disc). Probably want a proper `.ico` file with multi-resolution (16/32/48/256). Generate from the PNG or draw a new one in `scripts/gen_icons.py`.
-5. **Versioning / version resource?** PyInstaller can embed a Windows version resource block. Decide on version scheme (manual? git tag? date?). For now, manual string in `foxtray/__init__.py` that the About dialog already uses.
-6. **Antivirus false positives?** Unsigned PyInstaller bundles get flagged by some AVs. Mitigation: UPX disabled, build reproducibly, eventually sign. Document as known limitation.
-7. **Test strategy?** PyInstaller builds can't be exercised by pytest realistically. Add a smoke-test script that builds the `.exe`, runs it with `--help` or `list`, asserts exit 0 and expected output. Manual test covers the tray UI.
+Output: `dist/FoxTray.exe`.
 
-## File structure (anticipated)
+### Version
+
+`foxtray/__init__.py`:
+```python
+__version__ = "0.4.0"
+```
+
+`foxtray/ui/actions.py` — update `_ABOUT_BODY` to include the version:
+```python
+from foxtray import __version__
+
+_ABOUT_BODY = (
+    f"FoxTray v{__version__}\n"
+    "Windows tray launcher for Django + Angular project pairs.\n\n"
+    "Author: Foxugly\n"
+    "Website: https://foxugly.com\n"
+    "Repository: https://github.com/Foxugly/FoxTray"
+)
+```
+
+Wait — `_ABOUT_BODY` is a module-level constant. Using `__version__` at import time is fine. Verify no circular import: `foxtray/__init__.py` has no imports from submodules, so importing `foxtray.__version__` from `foxtray.ui.actions` is safe.
+
+## File structure
 
 New files:
-- `foxtray.spec` — PyInstaller spec.
-- `scripts/build_exe.py` OR `docs/packaging.md` — documents the build command.
+- `foxtray.spec` — PyInstaller config.
+- `foxtray/__init__.py` — `__version__ = "0.4.0"`.
+- `scripts/gen_ico.py` — or extend `scripts/gen_icons.py` to also write `foxtray.ico`.
+- `docs/packaging.md` — build instructions.
+- `docs/manual-tests/iter4c.md` — smoke test.
 - `assets/foxtray.ico` — generated multi-resolution icon.
 
 Modified files:
-- `foxtray/ui/icons.py` — `_MEIPASS`-aware `_assets_dir()`.
-- `foxtray/cli.py` — frozen-aware default for `--config`.
-- `foxtray/__init__.py` — `__version__` string (used by About dialog too).
+- `foxtray/ui/icons.py` — `_assets_dir()` frozen-aware.
+- `foxtray/cli.py` — `_default_config_path()` frozen-aware.
+- `foxtray/ui/actions.py` — `_ABOUT_BODY` includes version.
+- `scripts/gen_icons.py` — also produces `.ico`.
 - `requirements-dev.txt` — add `pyinstaller`.
-- `.gitignore` — add `dist/`, `build/`, `*.spec.pyc` as needed.
+- `.gitignore` — add `dist/`, `build/`, `*.spec.pyc`.
 
 Tests:
-- `tests/test_paths_frozen.py` — monkeypatch `sys.frozen` / `sys._MEIPASS` and verify `_assets_dir()` returns the bundled path.
-- Manual smoke doc `docs/manual-tests/iter4c.md` — build the `.exe`, verify it launches, tray icon loads, config resolves next to the binary.
+- `tests/test_icons.py` — new test for `_assets_dir` with `sys.frozen`/`sys._MEIPASS` monkeypatched.
+- `tests/test_cli.py` — new test for `_default_config_path` with frozen monkeypatched.
+- `tests/test_version.py` (new) — asserts `foxtray.__version__` exists and is a string.
 
-## Next step
+## Testing
 
-Hold a short brainstorming session to answer questions 1-7, then write `docs/superpowers/plans/2026-04-24-foxtray-iter4c.md` with the full TDD-style task breakdown.
+Unit tests cover the frozen-path resolution. Manual smoke covers the build + run.
+
+Important: the unit tests monkeypatch `sys.frozen` and `sys._MEIPASS` carefully. pytest runs with `sys.frozen` unset by default, so the dev paths are exercised for existing tests automatically.
+
+## Manual smoke (`docs/manual-tests/iter4c.md`)
+
+- Build: `./.venv/Scripts/python.exe -m PyInstaller --clean --noconfirm foxtray.spec`. No errors. `dist/FoxTray.exe` exists, ~25-35 MB.
+- Copy `dist/FoxTray.exe` to a fresh folder + copy `config.yaml` alongside.
+- Double-click `FoxTray.exe`. Tray icon appears (grey initially).
+- About dialog shows `FoxTray v0.4.0`.
+- Start a project from the menu. Angular + Django spawn. URL resolves. Works end-to-end.
+- Close FoxTray. `%APPDATA%\foxtray\tray.lock` is cleaned up.
+- Run a second `FoxTray.exe`: "FoxTray tray is already running (pid N)" + exit 1.
+
+## Self-review
+
+- Decisions all resolved; no open "TBD" in this spec.
+- Pathing: `_assets_dir()` and `_default_config_path()` both guard with `getattr(sys, 'frozen', False)` so dev behavior is strictly unchanged.
+- Version single-sourced in `foxtray/__init__.py`, consumed by About dialog. Future: PyPI setup.cfg + dynamic version.
