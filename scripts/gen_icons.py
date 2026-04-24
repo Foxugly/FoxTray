@@ -21,6 +21,17 @@ _COLORS = {
 }
 
 
+def _write_ico() -> None:
+    """Write assets/foxtray.ico — multi-resolution from the running (green) disc."""
+    from PIL import Image
+    src = _ASSETS / "icon_running.png"
+    img = Image.open(src)
+    img = img.resize((256, 256), Image.Resampling.LANCZOS)
+    ico_path = _ASSETS / "foxtray.ico"
+    img.save(ico_path, format="ICO", sizes=[(16, 16), (32, 32), (48, 48), (256, 256)])
+    print(f"wrote {ico_path}")
+
+
 def main() -> None:
     _ASSETS.mkdir(parents=True, exist_ok=True)
     for state, color in _COLORS.items():
@@ -33,6 +44,7 @@ def main() -> None:
         out = _ASSETS / f"icon_{state}.png"
         img.save(out, format="PNG")
         print(f"wrote {out}")
+    _write_ico()
 
 
 if __name__ == "__main__":
