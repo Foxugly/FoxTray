@@ -166,3 +166,25 @@ def test_spawn_with_log_closes_log_file_on_popen_failure(tmp_path: Path) -> None
         )
     # log_file should be closed after the raise
     assert log_file.closed
+
+
+def test_process_manager_passes_log_retention_to_rotate(
+    tmp_appdata: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from foxtray import logs, process
+    rotate_calls: list[tuple[str, str, int]] = []
+    def _fake_rotate(project: str, component: str, keep: int = 2) -> None:
+        rotate_calls.append((project, component, keep))
+    monkeypatch.setattr(logs, "rotate", _fake_rotate)
+    # Still need a valid log file writer
+    monkeypatch.setattr(logs, "open_writer", lambda p, c: (tmp_path / "x.log").open("w"))
+    # Spawn fails because command is bogus — but that's AFTER rotate is called
+    def _fake_spawn(*args, **kwargs):
+        raise RuntimeError("stop here")
+    monkeypatch.setattr(process, "spawn_with_log", _fake_spawn)
+    mgr = process.ProcessManager(log_retention=5)
+    try:
+        mgr.start(project="X", component="b", command=["x"], cwd=tmp_path)
+    except RuntimeError:
+        pass
+    assert rotate_calls == [("X", "b", 5)]

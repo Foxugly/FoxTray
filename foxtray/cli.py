@@ -15,7 +15,7 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 
 
 def _orchestrator(cfg: config.Config) -> project.Orchestrator:
-    return project.Orchestrator(manager=process.ProcessManager(), cfg=cfg)
+    return project.Orchestrator(manager=process.ProcessManager(log_retention=cfg.log_retention), cfg=cfg)
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -86,7 +86,7 @@ def cmd_tray(args: argparse.Namespace) -> int:
         print(f"{exc}", file=sys.stderr)
         return 1
     try:
-        manager = process.ProcessManager()
+        manager = process.ProcessManager(log_retention=cfg.log_retention)
         orchestrator = project.Orchestrator(manager=manager, cfg=cfg)
         tray_module.TrayApp(cfg, orchestrator, manager).run()
     finally:

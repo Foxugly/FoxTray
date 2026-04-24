@@ -105,6 +105,7 @@ class Config:
     projects: list[Project] = field(default_factory=list)
     scripts: tuple[Script, ...] = ()
     auto_start: str | None = None
+    log_retention: int = 2
 
     def get(self, name: str) -> Project:
         for project in self.projects:
@@ -254,4 +255,9 @@ def load(path: Path) -> Config:
             raise ConfigError(
                 f"auto_start references unknown project {auto_start_raw!r}"
             )
-    return Config(projects=projects, scripts=scripts, auto_start=auto_start_raw)
+    log_retention_raw = raw.get("log_retention", 2)
+    if not isinstance(log_retention_raw, int) or isinstance(log_retention_raw, bool) or log_retention_raw < 1:
+        raise ConfigError(
+            f"log_retention must be a positive integer, got {log_retention_raw!r}"
+        )
+    return Config(projects=projects, scripts=scripts, auto_start=auto_start_raw, log_retention=log_retention_raw)

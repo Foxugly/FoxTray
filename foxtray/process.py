@@ -72,6 +72,9 @@ def spawn_with_log(
 class ProcessManager:
     """Starts child processes with stdout+stderr redirected to rotating log files."""
 
+    def __init__(self, log_retention: int = 2) -> None:
+        self._log_retention = log_retention
+
     def start(
         self,
         *,
@@ -80,7 +83,7 @@ class ProcessManager:
         command: list[str],
         cwd: Path,
     ) -> subprocess.Popen[bytes]:
-        logs.rotate(project, component)
+        logs.rotate(project, component, keep=self._log_retention)
         log_file = logs.open_writer(project, component)
         return spawn_with_log(command, cwd, log_file)
 

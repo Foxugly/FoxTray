@@ -387,3 +387,26 @@ def test_config_auto_start_rejects_unknown_project_name(tmp_path: Path) -> None:
     yaml_body = SAMPLE_YAML.rstrip() + "\n\nauto_start: NopeProject\n"
     with pytest.raises(config.ConfigError, match="auto_start"):
         config.load(write_config(tmp_path, yaml_body))
+
+
+def test_config_log_retention_defaults_to_2(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, SAMPLE_YAML))
+    assert cfg.log_retention == 2
+
+
+def test_config_log_retention_accepts_positive_int(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + "\n\nlog_retention: 5\n"
+    cfg = config.load(write_config(tmp_path, yaml_body))
+    assert cfg.log_retention == 5
+
+
+def test_config_log_retention_rejects_zero(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + "\n\nlog_retention: 0\n"
+    with pytest.raises(config.ConfigError, match="log_retention"):
+        config.load(write_config(tmp_path, yaml_body))
+
+
+def test_config_log_retention_rejects_bool(tmp_path: Path) -> None:
+    yaml_body = SAMPLE_YAML.rstrip() + "\n\nlog_retention: true\n"
+    with pytest.raises(config.ConfigError, match="log_retention"):
+        config.load(write_config(tmp_path, yaml_body))

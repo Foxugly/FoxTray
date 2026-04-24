@@ -73,3 +73,49 @@ def test_rotate_task_moves_existing_log_to_dot1(tmp_appdata: Path) -> None:
 
 def test_logs_dir_returns_appdata_logs(tmp_appdata: Path) -> None:
     assert paths.logs_dir() == paths.appdata_root() / "logs"
+
+
+def test_rotate_with_keep_3_rotates_two_levels(tmp_appdata: Path) -> None:
+    # Write some "current" content, rotate, repeat — verify X.log.1 and X.log.2
+    first = logs.open_writer("X", "b")
+    first.write("first\n")
+    first.close()
+    logs.rotate("X", "b", keep=3)
+    second = logs.open_writer("X", "b")
+    second.write("second\n")
+    second.close()
+    logs.rotate("X", "b", keep=3)
+    third = logs.open_writer("X", "b")
+    third.write("third\n")
+    third.close()
+    # Now X.log = "third", X.log.1 = "second", X.log.2 = "first"
+    root = paths.appdata_root() / "logs"
+    assert "first" in (root / "X_b.log.2").read_text(encoding="utf-8")
+    assert "second" in (root / "X_b.log.1").read_text(encoding="utf-8")
+    assert "third" in (root / "X_b.log").read_text(encoding="utf-8")
+
+
+def test_rotate_with_keep_2_preserves_old_behavior(tmp_appdata: Path) -> None:
+    first = logs.open_writer("X", "b")
+    first.write("first\n")
+    first.close()
+    logs.rotate("X", "b", keep=2)
+    second = logs.open_writer("X", "b")
+    second.write("second\n")
+    second.close()
+    logs.rotate("X", "b", keep=2)
+    # X.log.1 has "second", X.log.2 should NOT exist
+    root = paths.appdata_root() / "logs"
+    assert (root / "X_b.log.1").exists()
+    assert "second" in (root / "X_b.log.1").read_text(encoding="utf-8")
+    assert not (root / "X_b.log.2").exists()
+
+
+def test_rotate_with_keep_1_is_noop(tmp_appdata: Path) -> None:
+    fh = logs.open_writer("X", "b")
+    fh.write("content\n")
+    fh.close()
+    logs.rotate("X", "b", keep=1)
+    root = paths.appdata_root() / "logs"
+    assert (root / "X_b.log").exists()
+    assert not (root / "X_b.log.1").exists()

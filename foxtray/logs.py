@@ -12,15 +12,28 @@ def _previous_path(project: str, component: str) -> Path:
     return current.parent / f"{current.stem}.log.1"
 
 
-def rotate(project: str, component: str) -> None:
+def rotate(project: str, component: str, keep: int = 2) -> None:
+    """Rotate X.log → X.log.1 → … → X.log.{keep-1}. Oldest is unlinked.
+
+    keep <= 1 is a no-op (no rotation). keep == 2 = current + 1 backup
+    (existing default behavior)."""
+    if keep <= 1:
+        return
     paths.ensure_dirs()
     current = paths.log_file(project, component)
     if not current.exists():
         return
-    previous = _previous_path(project, component)
-    if previous.exists():
-        previous.unlink()
-    current.rename(previous)
+    stem_dir = current.parent
+    base = current.stem
+    oldest = stem_dir / f"{base}.log.{keep - 1}"
+    if oldest.exists():
+        oldest.unlink()
+    for i in range(keep - 2, 0, -1):
+        src = stem_dir / f"{base}.log.{i}"
+        dst = stem_dir / f"{base}.log.{i + 1}"
+        if src.exists():
+            src.rename(dst)
+    current.rename(stem_dir / f"{base}.log.1")
 
 
 def open_writer(project: str, component: str) -> IO[str]:
