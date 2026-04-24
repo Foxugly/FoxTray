@@ -6,6 +6,11 @@ import time
 
 import requests
 
+_HEALTH_HEADERS = {
+    "User-Agent": "FoxTray-HealthCheck/1.0",
+    "X-FoxTray-HealthCheck": "1",
+}
+
 
 def port_listening(port: int, host: str | None = None, timeout: float = 0.3) -> bool:
     """Check whether the given port is bound on localhost.
@@ -38,7 +43,7 @@ def _probe(host: str, port: int, timeout: float) -> bool:
 
 def http_ok(url: str, timeout: float = 1.0) -> bool:
     try:
-        response = requests.get(url, timeout=timeout)
+        response = requests.get(url, timeout=timeout, headers=_HEALTH_HEADERS)
     except requests.RequestException:
         return False
     return 200 <= response.status_code < 500

@@ -6,7 +6,7 @@ import logging
 import sys
 from pathlib import Path
 
-from foxtray import config, process, project, singleton, state
+from foxtray import config, paths, process, project, singleton, state
 from foxtray.ui import tray as tray_module
 
 log = logging.getLogger(__name__)
@@ -18,6 +18,33 @@ def _default_config_path() -> Path:
 
 
 CONFIG_PATH = _default_config_path()
+
+
+def _bootstrap_file_handler() -> logging.Handler:
+    last_exc: OSError | None = None
+    for path in paths.bootstrap_log_candidates():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            return logging.FileHandler(path, encoding="utf-8")
+        except OSError as exc:
+            last_exc = exc
+            continue
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("No bootstrap log path candidates available")
+
+
+def _configure_logging() -> None:
+    paths.ensure_dirs()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stderr),
+            _bootstrap_file_handler(),
+        ],
+        force=True,
+    )
 
 
 def _orchestrator(cfg: config.Config) -> project.Orchestrator:
@@ -94,7 +121,7 @@ def cmd_tray(args: argparse.Namespace) -> int:
     try:
         manager = process.ProcessManager(log_retention=cfg.log_retention)
         orchestrator = project.Orchestrator(manager=manager, cfg=cfg)
-        tray_module.TrayApp(cfg, orchestrator, manager).run()
+        tray_module.TrayApp(cfg, orchestrator, manager, args.config).run()
     finally:
         singleton.release_lock()
     return 0
@@ -115,7 +142,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
             issues.append(
                 f"{proj.name}: backend venv python missing: {proj.backend.python_executable}"
             )
-        if not proj.frontend.path.exists():
+        if proj.frontend is not None and not proj.frontend.path.exists():
             issues.append(f"{proj.name}: frontend.path does not exist: {proj.frontend.path}")
         if proj.path_root is not None and not proj.path_root.exists():
             issues.append(f"{proj.name}: path_root does not exist: {proj.path_root}")
@@ -170,23 +197,34 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    if argv is None and getattr(sys, "frozen", False) and len(sys.argv) == 1:
+        argv = ["tray"]
+    _configure_logging()
     args = build_parser().parse_args(argv)
+    log.info("FoxTray starting command=%s config=%s frozen=%s", args.command, args.config, getattr(sys, "frozen", False))
     state.clear_if_orphaned()
     try:
-        return args.func(args)
+        rc = args.func(args)
+        if rc != 0:
+            log.error("FoxTray command failed command=%s exit_code=%s", args.command, rc)
+        return rc
     except config.ConfigError as exc:
+        log.exception("Config error during startup")
         print(f"Config error: {exc}", file=sys.stderr)
         return 2
     except process.PortInUse as exc:
+        log.exception("Port in use during startup")
         print(f"Port in use: {exc}", file=sys.stderr)
         return 2
     except process.ExecutableNotFound as exc:
+        log.exception("Executable not found during startup")
         print(f"Cannot launch subprocess: {exc}", file=sys.stderr)
         return 2
     except OSError as exc:
+        log.exception("OS error during startup")
         print(f"Cannot open config: {exc}", file=sys.stderr)
         return 2
     except config.ProjectNotFound as exc:
+        log.exception("Unknown project during startup")
         print(f"Unknown project: {exc.args[0]}", file=sys.stderr)
         return 2

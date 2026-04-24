@@ -7,10 +7,17 @@ from foxtray.project import ProjectStatus
 from foxtray.ui import tray
 
 
-def _status(*, backend_alive: bool = False, frontend_alive: bool = False, url_ok: bool = False) -> ProjectStatus:
+def _status(
+    *,
+    has_frontend: bool = True,
+    backend_alive: bool = False,
+    frontend_alive: bool = False,
+    url_ok: bool = False,
+) -> ProjectStatus:
     return ProjectStatus(
         name="X",
-        running=backend_alive and frontend_alive,
+        has_frontend=has_frontend,
+        running=backend_alive and (frontend_alive or not has_frontend),
         backend_alive=backend_alive,
         frontend_alive=frontend_alive,
         backend_port_listening=False,
@@ -163,6 +170,20 @@ def _project(name: str, url: str = "http://localhost:4200") -> config.Project:
     )
 
 
+def _backend_only_project(name: str, url: str = "http://localhost:8000") -> config.Project:
+    return config.Project(
+        name=name,
+        url=url,
+        backend=config.Backend(
+            path=Path(f"D:\\projects\\{name}-server"),
+            venv=".venv",
+            command="python manage.py runserver 8000",
+            port=8000,
+        ),
+        frontend=None,
+    )
+
+
 def _noop_handlers() -> tray.Handlers:
     return tray.Handlers(
         on_start=lambda p: None,
@@ -177,6 +198,8 @@ def _noop_handlers() -> tray.Handlers:
         on_about=lambda: None,
         on_restart=lambda p: None,
         on_open_logs_folder=lambda: None,
+        on_open_config=lambda: None,
+        on_reload_config=lambda: None,
         on_copy_url=lambda u: None,
         on_open_log=lambda path: None,
         on_toggle_autostart=lambda: None,
@@ -247,8 +270,8 @@ def test_menu_has_exit_and_stop_all_and_exit() -> None:
     texts = [i.text for i in items if not i.separator]
     assert "Exit" in texts
     assert "Stop all and exit" in texts
-    # Ordering is part of the contract: Exit comes right before Stop all and exit.
-    assert texts.index("Exit") + 1 == texts.index("Stop all and exit")
+    # Dangerous global actions live at the bottom, with Exit last.
+    assert texts.index("Stop all and exit") + 1 == texts.index("Exit")
 
 
 def test_menu_partial_project_shows_stop() -> None:
@@ -299,6 +322,7 @@ def test_icon_state_partial_when_both_alive_but_url_not_ok() -> None:
     active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
     statuses = {"FoxRunner": ProjectStatus(
         name="FoxRunner",
+        has_frontend=True,
         running=True,
         backend_alive=True,
         frontend_alive=True,
@@ -313,6 +337,7 @@ def test_icon_state_running_requires_url_ok() -> None:
     active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
     statuses = {"FoxRunner": ProjectStatus(
         name="FoxRunner",
+        has_frontend=True,
         running=True,
         backend_alive=True,
         frontend_alive=True,
@@ -419,6 +444,8 @@ def _noop_handlers_with_tasks() -> tray.Handlers:
         on_about=lambda: None,
         on_restart=lambda p: None,
         on_open_logs_folder=lambda: None,
+        on_open_config=lambda: None,
+        on_reload_config=lambda: None,
         on_copy_url=lambda u: None,
         on_open_log=lambda path: None,
         on_toggle_autostart=lambda: None,
@@ -527,7 +554,7 @@ def test_menu_has_about_entry() -> None:
     non_sep = [i for i in items if not i.separator]
     texts = [i.text for i in non_sep]
     assert "About" in texts
-    assert texts.index("About") > texts.index("Stop all and exit")
+    assert texts.index("About") < texts.index("Stop all")
 
 
 def test_menu_running_project_has_restart_entry() -> None:
@@ -598,6 +625,17 @@ def test_menu_root_has_open_logs_folder_entry() -> None:
     assert "Open logs folder" in root_texts
 
 
+def test_menu_root_has_open_and_reload_config_entries() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers(),
+        running_tasks=set(),
+    )
+    root_texts = [i.text for i in items if not i.separator and not i.submenu]
+    assert "Open config.yaml" in root_texts
+    assert "Reload config.yaml" in root_texts
+
+
 def test_menu_project_has_open_backend_log_entry() -> None:
     cfg = config.Config(projects=[_project("A")])
     items = tray.build_menu_items(
@@ -607,6 +645,18 @@ def test_menu_project_has_open_backend_log_entry() -> None:
     submenu_texts = [s.text for s in items[0].submenu]
     assert "Open backend log" in submenu_texts
     assert "Open frontend log" in submenu_texts
+
+
+def test_menu_backend_only_project_hides_frontend_entries() -> None:
+    cfg = config.Config(projects=[_backend_only_project("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status(has_frontend=False)}, _noop_handlers(),
+        running_tasks=set(),
+    )
+    submenu_texts = [s.text for s in items[0].submenu]
+    assert "Open backend folder" in submenu_texts
+    assert "Open frontend folder" not in submenu_texts
+    assert "Open frontend log" not in submenu_texts
 
 
 def test_menu_has_start_at_login_entry() -> None:
@@ -620,3 +670,26 @@ def test_menu_has_start_at_login_entry() -> None:
     assert "Start at login" in texts
     # Placed BEFORE About
     assert texts.index("Start at login") < texts.index("About")
+
+
+def test_menu_project_submenu_groups_primary_actions_first() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
+    statuses = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
+    items = tray.build_menu_items(
+        cfg, active, statuses, _noop_handlers(),
+        running_tasks=set(),
+    )
+    submenu_texts = [s.text for s in items[0].submenu if not s.separator]
+    assert submenu_texts[:4] == ["Stop", "Restart", "Open in browser", "Copy URL"]
+
+
+def test_menu_project_submenu_places_logs_after_folders() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers(),
+        running_tasks=set(),
+    )
+    submenu_texts = [s.text for s in items[0].submenu if not s.separator]
+    assert submenu_texts.index("Open backend folder") < submenu_texts.index("Open backend log")
+    assert submenu_texts.index("Open frontend folder") < submenu_texts.index("Open frontend log")

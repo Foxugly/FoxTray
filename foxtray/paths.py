@@ -6,6 +6,8 @@ Set ``FOXTRAY_APPDATA`` to override for tests.
 from __future__ import annotations
 
 import os
+import sys
+import tempfile
 from pathlib import Path
 
 
@@ -29,6 +31,34 @@ def state_file() -> Path:
 
 def log_file(project: str, component: str) -> Path:
     return logs_dir() / f"{project}_{component}.log"
+
+
+def bootstrap_log_file() -> Path:
+    return bootstrap_log_candidates()[0]
+
+
+def bootstrap_log_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    override = os.environ.get("FOXTRAY_APPDATA")
+    if override:
+        candidates.append(Path(override) / "logs" / "bootstrap.log")
+    else:
+        if getattr(sys, "frozen", False):
+            candidates.append(Path(sys.executable).resolve().parent / "bootstrap.log")
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            candidates.append(Path(appdata) / "foxtray" / "logs" / "bootstrap.log")
+        elif not getattr(sys, "frozen", False):
+            candidates.append(logs_dir() / "bootstrap.log")
+        candidates.append(Path(tempfile.gettempdir()) / "foxtray" / "bootstrap.log")
+
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        if path not in seen:
+            unique.append(path)
+            seen.add(path)
+    return unique
 
 
 def task_log_file(key: str) -> Path:

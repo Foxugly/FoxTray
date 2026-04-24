@@ -27,6 +27,7 @@ _POLL_INTERVAL_S = 3.0
 class Notification:
     title: str
     message: str
+    project_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -56,15 +57,17 @@ class Handlers:
     on_about: Callable[[], None]
     on_restart: Callable[[config_mod.Project], None]
     on_open_logs_folder: Callable[[], None]
+    on_open_config: Callable[[], None]
+    on_reload_config: Callable[[], None]
     on_copy_url: Callable[[str], None]
     on_open_log: Callable[[Path], None]
     on_toggle_autostart: Callable[[], None]
 
 
 def _status_to_icon_state(status: ProjectStatus) -> IconState:
-    if status.backend_alive and status.frontend_alive and status.url_ok:
+    if status.running and status.url_ok:
         return "running"
-    if status.backend_alive or status.frontend_alive:
+    if status.backend_alive or (status.has_frontend and status.frontend_alive):
         return "partial"
     return "stopped"
 
@@ -129,7 +132,7 @@ def compute_transitions(
             continue
 
         if prev_state == "stopped" and curr_state == "running":
-            notifications.append(Notification("FoxTray", f"{name} is up"))
+            notifications.append(Notification("FoxTray", f"{name} is up", project_name=name))
             pending_starts.discard(name)
         elif prev_state == "stopped" and curr_state == "partial":
             if name not in pending_starts:
@@ -144,7 +147,7 @@ def compute_transitions(
             )
         elif prev_state == "partial" and curr_state == "running":
             if name in pending_starts:
-                notifications.append(Notification("FoxTray", f"{name} is up"))
+                notifications.append(Notification("FoxTray", f"{name} is up", project_name=name))
                 pending_starts.discard(name)
             else:
                 notifications.append(Notification("FoxTray", f"{name} recovered"))
@@ -182,37 +185,11 @@ def _project_submenu(
     running_tasks: set[str],
 ) -> tuple[MenuItemSpec, ...]:
     is_stopped = icon_state == "stopped"
-    if is_stopped:
-        start_or_stop = MenuItemSpec(
-            text="Start", action=lambda p=project: handlers.on_start(p)
-        )
-    else:
-        start_or_stop = MenuItemSpec(
-            text="Stop", action=lambda p=project: handlers.on_stop(p)
-        )
     entries: list[MenuItemSpec] = [
-        start_or_stop,
-        MenuItemSpec(text="", separator=True),
         MenuItemSpec(
-            text="Open in browser",
-            action=lambda p=project: handlers.on_open_browser(p),
-            enabled=not is_stopped,
-        ),
-        MenuItemSpec(
-            text="Open backend folder",
-            action=lambda path=project.backend.path: handlers.on_open_folder(path),
-        ),
-        MenuItemSpec(
-            text="Open frontend folder",
-            action=lambda path=project.frontend.path: handlers.on_open_folder(path),
-        ),
-        MenuItemSpec(
-            text="Open backend log",
-            action=lambda p=paths.log_file(project.name, "backend"): handlers.on_open_log(p),
-        ),
-        MenuItemSpec(
-            text="Open frontend log",
-            action=lambda p=paths.log_file(project.name, "frontend"): handlers.on_open_log(p),
+            text="Start" if is_stopped else "Stop",
+            action=(lambda p=project: handlers.on_start(p))
+            if is_stopped else (lambda p=project: handlers.on_stop(p)),
         ),
     ]
     if not is_stopped:
@@ -220,20 +197,52 @@ def _project_submenu(
             text="Restart",
             action=lambda p=project: handlers.on_restart(p),
         ))
-    entries.append(MenuItemSpec(
-        text="Copy URL",
-        action=lambda u=project.url: handlers.on_copy_url(u),
-    ))
+
+    entries.extend([
+        MenuItemSpec(text="", separator=True),
+        MenuItemSpec(
+            text="Open in browser",
+            action=lambda p=project: handlers.on_open_browser(p),
+            enabled=not is_stopped,
+        ),
+        MenuItemSpec(
+            text="Copy URL",
+            action=lambda u=project.url: handlers.on_copy_url(u),
+        ),
+        MenuItemSpec(text="", separator=True),
+    ])
+
     if project.path_root is not None:
         entries.append(MenuItemSpec(
             text="Open project folder",
             action=lambda path=project.path_root: handlers.on_open_folder(path),
+        ))
+    entries.append(MenuItemSpec(
+        text="Open backend folder",
+        action=lambda path=project.backend.path: handlers.on_open_folder(path),
+    ))
+    if project.frontend is not None:
+        entries.append(MenuItemSpec(
+            text="Open frontend folder",
+            action=lambda path=project.frontend.path: handlers.on_open_folder(path),
+        ))
+
+    entries.append(MenuItemSpec(text="", separator=True))
+    entries.append(MenuItemSpec(
+        text="Open backend log",
+        action=lambda p=paths.log_file(project.name, "backend"): handlers.on_open_log(p),
+    ))
+    if project.frontend is not None:
+        entries.append(MenuItemSpec(
+            text="Open frontend log",
+            action=lambda p=paths.log_file(project.name, "frontend"): handlers.on_open_log(p),
         ))
     if project.tasks:
         task_specs = tuple(
             _task_spec(project, task, handlers, running_tasks)
             for task in project.tasks
         )
+        entries.append(MenuItemSpec(text="", separator=True))
         entries.append(MenuItemSpec(text="Tasks", submenu=task_specs))
     return tuple(entries)
 
@@ -283,23 +292,14 @@ def build_menu_items(
         text="Open logs folder",
         action=handlers.on_open_logs_folder,
     ))
-    items.append(MenuItemSpec(text="", separator=True))
-    items.append(
-        MenuItemSpec(
-            text="Stop all",
-            action=handlers.on_stop_all,
-            enabled=active is not None,
-        )
-    )
-    items.append(MenuItemSpec(text="", separator=True))
-    items.append(MenuItemSpec(text="Exit", action=handlers.on_exit))
-    items.append(
-        MenuItemSpec(
-            text="Stop all and exit",
-            action=handlers.on_stop_all_and_exit,
-            enabled=active is not None,
-        )
-    )
+    items.append(MenuItemSpec(
+        text="Open config.yaml",
+        action=handlers.on_open_config,
+    ))
+    items.append(MenuItemSpec(
+        text="Reload config.yaml",
+        action=handlers.on_reload_config,
+    ))
     from foxtray import autostart as autostart_mod
     items.append(MenuItemSpec(text="", separator=True))
     items.append(MenuItemSpec(
@@ -308,6 +308,22 @@ def build_menu_items(
         checked=lambda: autostart_mod.is_enabled(),
     ))
     items.append(MenuItemSpec(text="About", action=handlers.on_about))
+    items.append(MenuItemSpec(text="", separator=True))
+    items.append(
+        MenuItemSpec(
+            text="Stop all",
+            action=handlers.on_stop_all,
+            enabled=active is not None,
+        )
+    )
+    items.append(
+        MenuItemSpec(
+            text="Stop all and exit",
+            action=handlers.on_stop_all_and_exit,
+            enabled=active is not None,
+        )
+    )
+    items.append(MenuItemSpec(text="Exit", action=handlers.on_exit))
     return items
 
 
@@ -336,13 +352,15 @@ def _tooltip_text(
     status = statuses.get(active.name)
     if status is None:
         return f"FoxTray — {active.name} (unknown)"
-    if status.backend_alive and status.frontend_alive and status.url_ok:
+    if status.running and status.url_ok:
         return f"FoxTray — {active.name} RUNNING"
-    if status.backend_alive and status.frontend_alive:
+    if status.running:
         return f"FoxTray — {active.name} (starting…)"
     if status.backend_alive:
+        if not status.has_frontend:
+            return f"FoxTray — {active.name} (starting…)"
         return f"FoxTray — {active.name} PARTIAL (frontend down)"
-    if status.frontend_alive:
+    if status.has_frontend and status.frontend_alive:
         return f"FoxTray — {active.name} PARTIAL (backend down)"
     return f"FoxTray — {active.name} stopped"
 
@@ -355,9 +373,12 @@ class TrayApp:
         cfg: config_mod.Config,
         orchestrator: Orchestrator,
         process_manager: ProcessManager,
+        config_path: Path | None = None,
     ) -> None:
         self._cfg = cfg
         self._orchestrator = orchestrator
+        self._process_manager = process_manager
+        self._config_path = config_path
         self._icon: pystray.Icon | None = None
         self._prev_active: state_mod.ActiveProject | None = None
         self._prev_statuses: dict[str, ProjectStatus] = {
@@ -442,6 +463,11 @@ class TrayApp:
                 suppressed=suppressed,
                 pending_starts=self._orchestrator.pending_starts,
             ):
+                if note.project_name is not None:
+                    project = next((p for p in self._cfg.projects if p.name == note.project_name), None)
+                    if project is not None:
+                        actions.notify_project_up(project, self._icon)
+                        continue
                 self._icon.notify(note.message, title=note.title)
 
             new_icon_state = compute_icon_state(curr_active, curr_statuses)
@@ -508,6 +534,26 @@ class TrayApp:
         )
         return tuple(_spec_to_pystray(s) for s in specs)
 
+    def _reload_config(self) -> None:
+        if self._config_path is None:
+            raise RuntimeError("No config path available")
+        new_cfg = config_mod.load(self._config_path)
+        pending = set(self._orchestrator.pending_starts)
+        self._cfg = new_cfg
+        self._orchestrator = Orchestrator(
+            manager=self._process_manager,
+            cfg=new_cfg,
+        )
+        self._orchestrator.pending_starts.update(
+            name for name in pending if any(p.name == name for p in new_cfg.projects)
+        )
+        self._prev_statuses = {
+            p.name: self._prev_statuses.get(p.name, _zero_status(p.name))
+            for p in new_cfg.projects
+        }
+        if self._icon is not None:
+            self._icon.update_menu()
+
     def _handlers(self) -> Handlers:
         icon = self._icon
         assert icon is not None
@@ -539,6 +585,8 @@ class TrayApp:
             on_about=lambda: actions.on_about(icon),
             on_restart=lambda p: actions.on_restart(orch, p, icon, self._user_initiated_stop),
             on_open_logs_folder=lambda: actions.on_open_logs_folder(icon),
+            on_open_config=lambda: actions.on_open_config(self._config_path, icon),
+            on_reload_config=lambda: actions.on_reload_config(self._reload_config, icon),
             on_copy_url=lambda url: actions.on_copy_url(url, icon),
             on_open_log=lambda path: actions.on_open_log(path, icon),
             on_toggle_autostart=lambda: actions.on_toggle_autostart(icon),
@@ -548,6 +596,7 @@ class TrayApp:
 def _zero_status(name: str) -> ProjectStatus:
     return ProjectStatus(
         name=name,
+        has_frontend=True,
         running=False,
         backend_alive=False,
         frontend_alive=False,

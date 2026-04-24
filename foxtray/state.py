@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 class ActiveProject:
     name: str
     backend_pid: int
-    frontend_pid: int
+    frontend_pid: int | None
 
 
 @dataclass(frozen=True)
@@ -59,7 +59,10 @@ def clear_if_orphaned() -> bool:
     s = load()
     if s.active is None:
         return False
-    if psutil.pid_exists(s.active.backend_pid) or psutil.pid_exists(s.active.frontend_pid):
+    frontend_alive = (
+        s.active.frontend_pid is not None and psutil.pid_exists(s.active.frontend_pid)
+    )
+    if psutil.pid_exists(s.active.backend_pid) or frontend_alive:
         return False
     save(State(active=None))
     return True

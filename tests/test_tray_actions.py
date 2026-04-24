@@ -84,6 +84,30 @@ def test_on_start_calls_orchestrator() -> None:
     assert icon.notifications == []
 
 
+def test_notify_project_up_uses_clickable_toast(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        actions,
+        "_show_clickable_toast",
+        lambda title, message, url: recorded.append((title, message, url)),
+    )
+    icon = _FakeIcon()
+    actions.notify_project_up(_project(), icon)
+    assert recorded == [("FoxTray", "Demo is up", "http://localhost:4200")]
+    assert icon.notifications == []
+
+
+def test_notify_project_up_falls_back_to_icon_notify_on_toast_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(title: str, message: str, url: str) -> None:
+        raise RuntimeError("toast failed")
+    monkeypatch.setattr(actions, "_show_clickable_toast", _boom)
+    icon = _FakeIcon()
+    actions.notify_project_up(_project(), icon)
+    assert icon.notifications == [("FoxTray", "Demo is up\nhttp://localhost:4200")]
+
+
 def test_on_start_notifies_on_exception() -> None:
     orch = _FakeOrchestrator(raises=RuntimeError("boom"))
     icon = _FakeIcon()
@@ -305,11 +329,13 @@ def test_on_about_calls_show_dialog_with_title_and_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recorded: list[tuple[str, str]] = []
+    done = __import__("threading").Event()
     monkeypatch.setattr(
         actions, "_show_about_dialog",
-        lambda title, body: recorded.append((title, body)),
+        lambda title, body: (recorded.append((title, body)), done.set()),
     )
     actions.on_about(_FakeIcon())
+    assert done.wait(1.0)
     assert len(recorded) == 1
     title, body = recorded[0]
     assert "About" in title
@@ -321,12 +347,44 @@ def test_on_about_calls_show_dialog_with_title_and_body(
 def test_on_about_notifies_on_dialog_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    done = __import__("threading").Event()
     def _boom(title: str, body: str) -> None:
+        done.set()
         raise RuntimeError("boom")
     monkeypatch.setattr(actions, "_show_about_dialog", _boom)
     icon = _FakeIcon()
     actions.on_about(icon)
+    assert done.wait(1.0)
+    import time
+    deadline = time.monotonic() + 1.0
+    while not icon.notifications and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert icon.notifications == [("FoxTray error", "boom")]
+
+
+def test_on_about_ignores_second_click_while_dialog_is_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = __import__("threading").Event()
+    release = __import__("threading").Event()
+    calls: list[tuple[str, str]] = []
+
+    def _block(title: str, body: str) -> None:
+        calls.append((title, body))
+        entered.set()
+        assert release.wait(1.0)
+
+    monkeypatch.setattr(actions, "_show_about_dialog", _block)
+    icon = _FakeIcon()
+    actions.on_about(icon)
+    assert entered.wait(1.0)
+    actions.on_about(icon)
+    release.set()
+    import time
+    deadline = time.monotonic() + 1.0
+    while actions._about_dialog_open.is_set() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(calls) == 1
 
 
 def test_on_restart_calls_stop_then_start_in_background_thread() -> None:
@@ -407,6 +465,33 @@ def test_on_open_log_notifies_when_file_missing(
     icon = _FakeIcon()
     actions.on_open_log(log_path, icon)
     assert any("No log yet" in message for _title, message in icon.notifications)
+
+
+def test_on_open_config_opens_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text("projects: []\n", encoding="utf-8")
+    captured: list[Path] = []
+    monkeypatch.setattr(actions, "_open_folder_native", captured.append)
+    icon = _FakeIcon()
+    actions.on_open_config(cfg_path, icon)
+    assert captured == [cfg_path]
+    assert icon.notifications == []
+
+
+def test_on_reload_config_runs_callback_and_notifies() -> None:
+    called: list[bool] = []
+    icon = _FakeIcon()
+    actions.on_reload_config(lambda: called.append(True), icon)
+    assert called == [True]
+    assert icon.notifications == [("FoxTray", "Config reloaded")]
+
+
+def test_on_reload_config_notifies_on_failure() -> None:
+    icon = _FakeIcon()
+    actions.on_reload_config(lambda: (_ for _ in ()).throw(RuntimeError("boom")), icon)
+    assert icon.notifications == [("FoxTray error", "boom")]
 
 
 def test_about_body_includes_version() -> None:

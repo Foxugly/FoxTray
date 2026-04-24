@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+import tkinter as tk
 import webbrowser
 from pathlib import Path
 from typing import Protocol, Sequence
@@ -28,6 +29,10 @@ class NotifierClosable(Notifier, Closable, Protocol):
     """Combined Protocol for icons that must both notify and shut down."""
 
 
+class ReloadableConfig(Protocol):
+    def __call__(self) -> None: ...
+
+
 def _open_url(url: str) -> None:
     webbrowser.open(url)
 
@@ -39,6 +44,86 @@ def _open_folder_native(path: Path) -> None:
 def _notify_error(icon: Notifier, exc: Exception) -> None:
     log.warning("tray handler failed", exc_info=True)
     icon.notify(str(exc), title="FoxTray error")
+
+
+def _show_clickable_toast(title: str, message: str, url: str) -> None:
+    def _run() -> None:
+        root = tk.Tk()
+        root.withdraw()
+
+        toast = tk.Toplevel(root)
+        toast.overrideredirect(True)
+        toast.attributes("-topmost", True)
+        toast.configure(bg="#202124")
+
+        width = 380
+        height = 120
+        screen_width = toast.winfo_screenwidth()
+        screen_height = toast.winfo_screenheight()
+        x = screen_width - width - 24
+        y = screen_height - height - 64
+        toast.geometry(f"{width}x{height}+{x}+{y}")
+
+        frame = tk.Frame(toast, bg="#202124", padx=14, pady=12)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(
+            frame,
+            text=title,
+            bg="#202124",
+            fg="#ffffff",
+            anchor="w",
+            font=("Segoe UI Semibold", 11),
+        ).pack(fill="x")
+        tk.Label(
+            frame,
+            text=message,
+            bg="#202124",
+            fg="#d7dadc",
+            anchor="w",
+            justify="left",
+            font=("Segoe UI", 10),
+        ).pack(fill="x", pady=(6, 4))
+
+        link = tk.Label(
+            frame,
+            text=url,
+            bg="#202124",
+            fg="#7cc7ff",
+            anchor="w",
+            justify="left",
+            cursor="hand2",
+            font=("Segoe UI", 10, "underline"),
+        )
+        link.pack(fill="x")
+
+        def _open_and_close(_event: object | None = None) -> None:
+            _open_url(url)
+            _close()
+
+        def _close() -> None:
+            try:
+                toast.destroy()
+            finally:
+                root.quit()
+                root.destroy()
+
+        link.bind("<Button-1>", _open_and_close)
+        toast.bind("<Button-1>", _open_and_close)
+        toast.after(8000, _close)
+        toast.deiconify()
+        root.mainloop()
+
+    threading.Thread(target=_run, name="foxtray-toast", daemon=True).start()
+
+
+def notify_project_up(project: config.Project, icon: Notifier) -> None:
+    message = f"{project.name} is up"
+    try:
+        _show_clickable_toast("FoxTray", message, project.url)
+    except Exception:  # noqa: BLE001
+        log.warning("clickable project toast failed", exc_info=True)
+        icon.notify(f"{message}\n{project.url}", title="FoxTray")
 
 
 def on_start(orchestrator: Orchestrator, project: config.Project, icon: Notifier) -> None:
@@ -169,6 +254,7 @@ _ABOUT_BODY = (
     "Website: https://foxugly.com\n"
     "Repository: https://github.com/Foxugly/FoxTray"
 )
+_about_dialog_open = threading.Event()
 
 
 def _show_about_dialog(title: str, body: str) -> None:
@@ -179,10 +265,19 @@ def _show_about_dialog(title: str, body: str) -> None:
 
 
 def on_about(icon: Notifier) -> None:
-    try:
-        _show_about_dialog(_ABOUT_TITLE, _ABOUT_BODY)
-    except Exception as exc:  # noqa: BLE001 — MessageBoxW failure must not crash tray
-        _notify_error(icon, exc)
+    if _about_dialog_open.is_set():
+        return
+
+    def _run() -> None:
+        _about_dialog_open.set()
+        try:
+            _show_about_dialog(_ABOUT_TITLE, _ABOUT_BODY)
+        except Exception as exc:  # noqa: BLE001 — MessageBoxW failure must not crash tray
+            _notify_error(icon, exc)
+        finally:
+            _about_dialog_open.clear()
+
+    threading.Thread(target=_run, name="foxtray-about", daemon=True).start()
 
 
 def on_restart(
@@ -233,6 +328,23 @@ def on_open_log(log_path: Path, icon: Notifier) -> None:
             icon.notify(f"No log yet: {log_path.name}", title="FoxTray")
             return
         _open_folder_native(log_path)
+    except Exception as exc:  # noqa: BLE001
+        _notify_error(icon, exc)
+
+
+def on_open_config(config_path: Path | None, icon: Notifier) -> None:
+    try:
+        if config_path is None:
+            raise RuntimeError("No config path available")
+        _open_folder_native(config_path)
+    except Exception as exc:  # noqa: BLE001
+        _notify_error(icon, exc)
+
+
+def on_reload_config(reload_config: ReloadableConfig, icon: Notifier) -> None:
+    try:
+        reload_config()
+        icon.notify("Config reloaded", title="FoxTray")
     except Exception as exc:  # noqa: BLE001
         _notify_error(icon, exc)
 

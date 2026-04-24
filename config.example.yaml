@@ -1,0 +1,54 @@
+projects:
+  - name: InternalAdminApp
+    url: http://127.0.0.1:8000
+    backend:
+      path: C:\Users\YourName\Projects\internal-admin-backend
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+
+  - name: ClientPortal
+    url: http://localhost:4200
+    backend:
+      path: D:\Projects\client-portal-server
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+    frontend:
+      path: C:\Users\YourName\Projects\client-portal-frontend
+      command: ng serve --port 4200
+      port: 4200
+
+  - name: TrainingPlatform
+    url: http://localhost:4200
+    backend:
+      path: D:\Projects\training-platform-server
+      venv: ..\.venv
+      command: python manage.py runserver 8000
+      port: 8000
+    frontend:
+      path: D:\Projects\training-platform-frontend
+      command: ng serve --port 4200
+      port: 4200
+
+  - name: OperationsDesk
+    url: http://localhost:4200
+    backend:
+      path: D:\Projects\operations-desk-server
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+    frontend:
+      path: C:\Users\YourName\Projects\operations-desk-frontend
+      command: ng serve --port 4200
+      port: 4200
+
+scripts:
+  - name: Git Pull All
+    path: C:\Users\YourName\Projects\shared-tools
+    command: git pull
+
+  - name: Run Maintenance
+    path: D:\Projects\maintenance-scripts
+    venv: .venv
+    command: python run_maintenance.py

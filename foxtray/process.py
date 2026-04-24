@@ -21,9 +21,12 @@ class PortInUse(RuntimeError):
 
 log = logging.getLogger(__name__)
 
-# On Windows CREATE_NEW_PROCESS_GROUP lets the child detach from our Ctrl+C
-# while psutil gives us a portable tree-walk for shutdown.
-_CREATION_FLAGS = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+# On Windows keep a separate process group for clean shutdowns and suppress
+# child console windows because output is already redirected to log files.
+_CREATION_FLAGS = (
+    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+)
 
 
 def _resolve_command(command: list[str]) -> list[str]:

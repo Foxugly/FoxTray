@@ -33,6 +33,12 @@ def _cfg_with(project: config.Project) -> config.Config:
     return config.Config(projects=[project])
 
 
+def _active_pids(active: state.ActiveProject) -> tuple[int, ...]:
+    if active.frontend_pid is None:
+        return (active.backend_pid,)
+    return (active.backend_pid, active.frontend_pid)
+
+
 @pytest.fixture
 def sample_project(tmp_path: Path) -> config.Project:
     return config.Project(
@@ -47,7 +53,10 @@ def sample_project(tmp_path: Path) -> config.Project:
     )
 
 
-def test_start_records_pids_in_state(tmp_appdata: Path, sample_project: config.Project) -> None:
+def test_start_records_pids_in_state(
+    tmp_appdata: Path, sample_project: config.Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(project.health, "wait_port_free", lambda *args, **kwargs: True)
     manager = _FakeManager()
     orchestrator = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
 
@@ -60,7 +69,7 @@ def test_start_records_pids_in_state(tmp_appdata: Path, sample_project: config.P
     assert active.frontend_pid > 0
 
     # Cleanup: our fake started real sleep() processes, kill them via psutil.
-    for pid in (active.backend_pid, active.frontend_pid):
+    for pid in _active_pids(active):
         try:
             psutil.Process(pid).kill()
         except psutil.NoSuchProcess:
@@ -68,8 +77,9 @@ def test_start_records_pids_in_state(tmp_appdata: Path, sample_project: config.P
 
 
 def test_start_stops_existing_active_first(
-    tmp_appdata: Path, sample_project: config.Project
+    tmp_appdata: Path, sample_project: config.Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(project.health, "wait_port_free", lambda *args, **kwargs: True)
     state.save(state.State(active=state.ActiveProject(name="Prev", backend_pid=11, frontend_pid=22)))
     manager = _FakeManager()
     orchestrator = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
@@ -81,7 +91,7 @@ def test_start_stops_existing_active_first(
     finally:
         active = state.load().active
         if active is not None:
-            for pid in (active.backend_pid, active.frontend_pid):
+            for pid in _active_pids(active):
                 try:
                     psutil.Process(pid).kill()
                 except psutil.NoSuchProcess:
@@ -145,8 +155,9 @@ def test_status_alive_when_pids_exist(
 
 
 def test_start_kills_backend_if_frontend_launch_fails(
-    tmp_appdata: Path, sample_project: config.Project
+    tmp_appdata: Path, sample_project: config.Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(project.health, "wait_port_free", lambda *args, **kwargs: True)
     class _BrokenFrontendManager:
         def __init__(self) -> None:
             self.killed: list[int] = []
@@ -339,7 +350,7 @@ def test_start_calls_wait_port_free_with_3s_timeout(
     # pattern from test_start_records_pids_in_state)
     active = state.load().active
     assert active is not None
-    for pid in (active.backend_pid, active.frontend_pid):
+    for pid in _active_pids(active):
         try:
             psutil.Process(pid).kill()
         except psutil.NoSuchProcess:
@@ -396,3 +407,51 @@ def test_status_falls_back_to_url_when_no_health_url(
     orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
     orch.status(sample_project)
     assert captured == [sample_project.url]
+
+
+def test_start_without_frontend_only_launches_backend(
+    tmp_appdata: Path, sample_project: config.Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(project.health, "wait_port_free", lambda *args, **kwargs: True)
+    backend_only = config.Project(
+        name=sample_project.name,
+        url="http://localhost:8000",
+        backend=sample_project.backend,
+        frontend=None,
+    )
+    manager = _FakeManager()
+    orch = project.Orchestrator(manager=manager, cfg=_cfg_with(backend_only))
+
+    orch.start(backend_only)
+
+    active = state.load().active
+    assert active is not None
+    assert active.frontend_pid is None
+    assert [entry["component"] for entry in manager.started] == ["backend"]
+    for pid in _active_pids(active):
+        try:
+            psutil.Process(pid).kill()
+        except psutil.NoSuchProcess:
+            pass
+
+
+def test_status_running_without_frontend_when_backend_alive(
+    tmp_appdata: Path, sample_project: config.Project, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend_only = config.Project(
+        name=sample_project.name,
+        url="http://localhost:8000",
+        backend=sample_project.backend,
+        frontend=None,
+    )
+    state.save(state.State(active=state.ActiveProject(
+        name=backend_only.name, backend_pid=1, frontend_pid=None
+    )))
+    monkeypatch.setattr(project.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(project.health, "http_ok", lambda url, timeout=1.0: True)
+
+    status = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(backend_only)).status(backend_only)
+    assert status.has_frontend is False
+    assert status.running is True
+    assert status.backend_alive is True
+    assert status.frontend_alive is False

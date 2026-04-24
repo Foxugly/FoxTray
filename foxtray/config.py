@@ -69,7 +69,13 @@ class Task:
         return parts
 
     def resolved_cwd(self, project: "Project") -> Path:
-        return project.backend.path if self.cwd == "backend" else project.frontend.path
+        if self.cwd == "backend":
+            return project.backend.path
+        if project.frontend is None:
+            raise ConfigError(
+                f"project {project.name!r} task {self.name!r}: cwd 'frontend' requires a frontend"
+            )
+        return project.frontend.path
 
 
 @dataclass(frozen=True)
@@ -77,7 +83,7 @@ class Project:
     name: str
     url: str
     backend: Backend
-    frontend: Frontend
+    frontend: Frontend | None
     start_timeout: int = 30
     tasks: tuple[Task, ...] = ()
     path_root: Path | None = None
@@ -136,7 +142,9 @@ def _parse_backend(raw: dict[str, Any]) -> Backend:
     return backend
 
 
-def _parse_frontend(raw: dict[str, Any]) -> Frontend:
+def _parse_frontend(raw: dict[str, Any] | None) -> Frontend | None:
+    if raw is None:
+        return None
     return Frontend(
         path=_expand_path(_require(raw, "path", "frontend")),
         command=_require(raw, "command", "frontend"),
@@ -174,6 +182,7 @@ def _parse_project(raw: dict[str, Any]) -> Project:
         raise ConfigError(
             f"project {name!r}: start_timeout must be > 0, got {start_timeout_raw}"
         )
+    frontend = _parse_frontend(raw.get("frontend"))
     tasks_raw = raw.get("tasks", [])
     if not isinstance(tasks_raw, list):
         raise ConfigError(f"project {name!r}: tasks must be a list")
@@ -183,6 +192,10 @@ def _parse_project(raw: dict[str, Any]) -> Project:
     if duplicate_tasks:
         raise ConfigError(
             f"project {name!r}: duplicate task names: {sorted(duplicate_tasks)}"
+        )
+    if frontend is None and any(task.cwd == "frontend" for task in tasks):
+        raise ConfigError(
+            f"project {name!r}: frontend tasks require a configured frontend"
         )
     path_root_raw = raw.get("path_root")
     path_root: Path | None = None
@@ -201,7 +214,7 @@ def _parse_project(raw: dict[str, Any]) -> Project:
         name=name,
         url=_require(raw, "url", f"project {name!r}"),
         backend=_parse_backend(_require(raw, "backend", f"project {name!r}")),
-        frontend=_parse_frontend(_require(raw, "frontend", f"project {name!r}")),
+        frontend=frontend,
         start_timeout=start_timeout_raw,
         tasks=tasks,
         path_root=path_root,

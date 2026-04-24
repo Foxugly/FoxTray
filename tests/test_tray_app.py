@@ -33,10 +33,17 @@ def _project(name: str) -> config.Project:
     )
 
 
-def _status(*, backend_alive: bool = False, frontend_alive: bool = False, url_ok: bool = False) -> ProjectStatus:
+def _status(
+    *,
+    has_frontend: bool = True,
+    backend_alive: bool = False,
+    frontend_alive: bool = False,
+    url_ok: bool = False,
+) -> ProjectStatus:
     return ProjectStatus(
         name="X",
-        running=backend_alive and frontend_alive,
+        has_frontend=has_frontend,
+        running=backend_alive and (frontend_alive or not has_frontend),
         backend_alive=backend_alive,
         frontend_alive=frontend_alive,
         backend_port_listening=False,
@@ -51,12 +58,16 @@ class _FakeIcon:
     notifications: list[tuple[str, str]] = field(default_factory=list)
     stopped: bool = False
     title: str = "FoxTray"
+    menu_updated: int = 0
 
     def notify(self, message: str, title: str = "") -> None:
         self.notifications.append((title, message))
 
     def stop(self) -> None:
         self.stopped = True
+
+    def update_menu(self) -> None:
+        self.menu_updated += 1
 
 
 @dataclass
@@ -83,6 +94,12 @@ def test_poll_tick_sets_icon_to_running_and_notifies(
     icon = _FakeIcon(icon=icons.load("stopped"))
     app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
     app._icon = icon  # inject fake
+    recorded: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        tray.actions,
+        "notify_project_up",
+        lambda project, icon: recorded.append((project.name, project.url)),
+    )
 
     # Simulate CLI having just set state to active A
     state.save(state.State(active=state.ActiveProject(
@@ -93,7 +110,8 @@ def test_poll_tick_sets_icon_to_running_and_notifies(
 
     app._poll_tick()
 
-    assert icon.notifications == [("FoxTray", "A is up")]
+    assert recorded == [("A", "http://localhost:4200")]
+    assert icon.notifications == []
     assert icon.icon is icons.load("running")
 
 
@@ -240,6 +258,12 @@ def test_poll_tick_passes_pending_starts_into_compute_transitions(
     icon = _FakeIcon(icon=icons.load("stopped"))
     app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
     app._icon = icon
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        tray.actions,
+        "notify_project_up",
+        lambda project, icon: recorded.append(project.url),
+    )
     state.save(state.State(active=state.ActiveProject(
         name="A", backend_pid=1, frontend_pid=2
     )))
@@ -250,7 +274,8 @@ def test_poll_tick_passes_pending_starts_into_compute_transitions(
     app._poll_tick()
 
     # Should have fired "A is up" (stopped → running, pending_starts contained A)
-    assert any("A is up" in n[1] for n in icon.notifications)
+    assert recorded == ["http://localhost:4200"]
+    assert icon.notifications == []
     # pending_starts consumed
     assert orch.pending_starts == set()
 
@@ -418,3 +443,33 @@ def test_run_skips_auto_start_when_active_project_exists(
     import time
     time.sleep(0.3)
     assert started == []
+
+
+def test_reload_config_replaces_cfg_and_updates_menu(
+    tmp_appdata: Path, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        """
+projects:
+  - name: B
+    url: http://localhost:8000
+    backend:
+      path: D:\\\\p\\\\B\\\\back
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+""",
+        encoding="utf-8",
+    )
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(next_statuses={"A": _status()})
+    icon = _FakeIcon(icon=icons.load("stopped"))
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), config_path=cfg_path)  # type: ignore[arg-type]
+    app._icon = icon
+
+    app._reload_config()
+
+    assert [p.name for p in app._cfg.projects] == ["B"]
+    assert [p.name for p in app._orchestrator._cfg.projects] == ["B"]
+    assert icon.menu_updated == 1

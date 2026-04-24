@@ -25,6 +25,7 @@ class _ManagerProtocol(Protocol):
 @dataclass(frozen=True)
 class ProjectStatus:
     name: str
+    has_frontend: bool
     running: bool
     backend_alive: bool
     frontend_alive: bool
@@ -62,7 +63,7 @@ class Orchestrator:
             raise process.PortInUse(
                 f"backend port {project.backend.port} still in use"
             )
-        if not health.wait_port_free(project.frontend.port, timeout=3.0):
+        if project.frontend is not None and not health.wait_port_free(project.frontend.port, timeout=3.0):
             raise process.PortInUse(
                 f"frontend port {project.frontend.port} still in use"
             )
@@ -73,22 +74,25 @@ class Orchestrator:
             command=project.backend.resolved_command,
             cwd=project.backend.path,
         )
-        try:
-            frontend_popen = self._manager.start(
-                project=project.name,
-                component="frontend",
-                command=project.frontend.resolved_command,
-                cwd=project.frontend.path,
-            )
-        except Exception:
-            self._manager.kill_tree(backend_popen.pid)
-            raise
+        frontend_pid: int | None = None
+        if project.frontend is not None:
+            try:
+                frontend_popen = self._manager.start(
+                    project=project.name,
+                    component="frontend",
+                    command=project.frontend.resolved_command,
+                    cwd=project.frontend.path,
+                )
+            except Exception:
+                self._manager.kill_tree(backend_popen.pid)
+                raise
+            frontend_pid = frontend_popen.pid
         state.save(
             state.State(
                 active=state.ActiveProject(
                     name=project.name,
                     backend_pid=backend_popen.pid,
-                    frontend_pid=frontend_popen.pid,
+                    frontend_pid=frontend_pid,
                 )
             )
         )
@@ -107,7 +111,7 @@ class Orchestrator:
                 "stop: backend port %s still listening after timeout",
                 cfg_project.backend.port,
             )
-        if not health.wait_port_free(cfg_project.frontend.port, timeout=10.0):
+        if cfg_project.frontend is not None and not health.wait_port_free(cfg_project.frontend.port, timeout=10.0):
             log.warning(
                 "stop: frontend port %s still listening after timeout",
                 cfg_project.frontend.port,
@@ -124,15 +128,22 @@ class Orchestrator:
         current = state.load().active
         is_this_active = current is not None and current.name == project.name
         backend_alive = is_this_active and psutil.pid_exists(current.backend_pid)
-        frontend_alive = is_this_active and psutil.pid_exists(current.frontend_pid)
+        has_frontend = project.frontend is not None
+        frontend_alive = (
+            is_this_active
+            and current.frontend_pid is not None
+            and psutil.pid_exists(current.frontend_pid)
+        )
+        url_ok = health.http_ok(project.health_url or project.url) if (backend_alive and (frontend_alive or not has_frontend)) else False
         return ProjectStatus(
             name=project.name,
-            running=backend_alive and frontend_alive,
+            has_frontend=has_frontend,
+            running=backend_alive and (frontend_alive or not has_frontend),
             backend_alive=backend_alive,
             frontend_alive=frontend_alive,
             backend_port_listening=health.port_listening(project.backend.port) if backend_alive else False,
-            frontend_port_listening=health.port_listening(project.frontend.port) if frontend_alive else False,
-            url_ok=health.http_ok(project.health_url or project.url) if (backend_alive and frontend_alive) else False,
+            frontend_port_listening=health.port_listening(project.frontend.port) if (has_frontend and frontend_alive) else False,
+            url_ok=url_ok,
         )
 
     def wait_healthy(
@@ -153,6 +164,7 @@ class Orchestrator:
             time.sleep(interval)
         return self.status(project).url_ok
 
-    def _kill_pair(self, backend_pid: int, frontend_pid: int) -> None:
+    def _kill_pair(self, backend_pid: int, frontend_pid: int | None) -> None:
         self._manager.kill_tree(backend_pid)
-        self._manager.kill_tree(frontend_pid)
+        if frontend_pid is not None:
+            self._manager.kill_tree(frontend_pid)

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from foxtray import cli
+from foxtray import cli, paths
 
 
 CONFIG_YAML = """
@@ -93,7 +93,7 @@ def test_tray_command_parses_and_dispatches(
     called: list[str] = []
 
     class _FakeTray:
-        def __init__(self, cfg, orchestrator, process_manager) -> None:  # type: ignore[no-untyped-def]
+        def __init__(self, cfg, orchestrator, process_manager, config_path=None) -> None:  # type: ignore[no-untyped-def]
             called.append(f"init:{len(cfg.projects)}")
 
         def run(self) -> None:
@@ -195,7 +195,7 @@ def test_cmd_tray_acquires_and_releases_lock(
     monkeypatch.setattr(singleton, "release_lock", lambda: calls.append("release"))
 
     class _FakeTray:
-        def __init__(self, cfg, orch, pm) -> None: ...
+        def __init__(self, cfg, orch, pm, config_path=None) -> None: ...
         def run(self) -> None: calls.append("run")
 
     from foxtray.ui import tray as tray_mod
@@ -220,6 +220,21 @@ def test_cmd_tray_exits_1_when_lock_held(
     assert rc == 1
     assert "already running" in err
     assert "123" in err
+    log_text = paths.bootstrap_log_file().read_text(encoding="utf-8")
+    assert "FoxTray command failed command=tray exit_code=1" in log_text
+
+
+def test_config_error_writes_bootstrap_log(
+    tmp_appdata: Path, tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("projects: not-a-list", encoding="utf-8")
+    rc = cli.main(["--config", str(broken), "list"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "Config error" in err
+    log_text = paths.bootstrap_log_file().read_text(encoding="utf-8")
+    assert "Config error during startup" in log_text
 
 
 def test_cmd_tray_releases_lock_even_when_trayapp_raises(
@@ -231,7 +246,7 @@ def test_cmd_tray_releases_lock_even_when_trayapp_raises(
     monkeypatch.setattr(singleton, "release_lock", lambda: released.append(True))
 
     class _BoomTray:
-        def __init__(self, cfg, orch, pm) -> None: ...
+        def __init__(self, cfg, orch, pm, config_path=None) -> None: ...
         def run(self) -> None:
             raise RuntimeError("mid-run crash")
 
@@ -349,6 +364,77 @@ def test_default_config_path_uses_exe_dir_when_frozen(
     monkeypatch.setattr("sys.frozen", True, raising=False)
     monkeypatch.setattr("sys.executable", str(fake_exe), raising=False)
     assert cli_mod._default_config_path() == tmp_path / "config.yaml"
+
+
+def test_main_defaults_to_tray_when_frozen_and_no_args(
+    demo_config: Path, tmp_appdata: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called: list[str] = []
+    monkeypatch.setattr(cli, "CONFIG_PATH", demo_config)
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.argv", ["FoxTray.exe"])
+
+    class _FakeTray:
+        def __init__(self, cfg, orchestrator, process_manager, config_path=None) -> None:  # type: ignore[no-untyped-def]
+            called.append(f"init:{config_path}")
+
+        def run(self) -> None:
+            called.append("run")
+
+    from foxtray.ui import tray as tray_mod
+    monkeypatch.setattr(tray_mod, "TrayApp", _FakeTray)
+
+    rc = cli.main()
+    assert rc == 0
+    assert called == [f"init:{demo_config}", "run"]
+
+
+def test_config_error_writes_bootstrap_log_next_to_exe_when_frozen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("projects: not-a-list", encoding="utf-8")
+    fake_exe = tmp_path / "FoxTray.exe"
+    fake_exe.write_bytes(b"")
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", str(fake_exe), raising=False)
+    rc = cli.main(["--config", str(broken), "list"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "Config error" in err
+    log_text = (tmp_path / "bootstrap.log").read_text(encoding="utf-8")
+    assert "Config error during startup" in log_text
+
+
+def test_config_error_falls_back_to_appdata_bootstrap_log_when_exe_dir_not_writable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("projects: not-a-list", encoding="utf-8")
+    fake_exe = tmp_path / "FoxTray.exe"
+    fake_exe.write_bytes(b"")
+    appdata = tmp_path / "appdata"
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", str(fake_exe), raising=False)
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    original_handler = cli.logging.FileHandler
+    failures = {tmp_path / "bootstrap.log"}
+
+    def _fake_handler(path, *args, **kwargs):
+        if Path(path) in failures:
+            raise OSError("no write access")
+        return original_handler(path, *args, **kwargs)
+
+    monkeypatch.setattr(cli.logging, "FileHandler", _fake_handler)
+
+    rc = cli.main(["--config", str(broken), "list"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "Config error" in err
+    fallback = appdata / "foxtray" / "logs" / "bootstrap.log"
+    assert fallback.exists()
+    assert "Config error during startup" in fallback.read_text(encoding="utf-8")
 
 
 def test_default_config_path_uses_dev_path_when_not_frozen(

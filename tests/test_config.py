@@ -36,6 +36,21 @@ def test_load_parses_single_project(tmp_path: Path) -> None:
     assert foxrunner.frontend.port == 4200
 
 
+def test_load_allows_project_without_frontend(tmp_path: Path) -> None:
+    body = """
+projects:
+  - name: ApiOnly
+    url: http://localhost:8000
+    backend:
+      path: D:\\\\projects\\\\api-only
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+"""
+    cfg = config.load(write_config(tmp_path, body))
+    assert cfg.projects[0].frontend is None
+
+
 def test_backend_python_substitutes_venv(tmp_path: Path) -> None:
     cfg = config.load(write_config(tmp_path, SAMPLE_YAML))
     backend = cfg.projects[0].backend
@@ -192,6 +207,25 @@ def test_task_resolved_cwd_frontend(tmp_path: Path) -> None:
     project = cfg.projects[0]
     ng_test = project.tasks[2]
     assert ng_test.resolved_cwd(project) == project.frontend.path
+
+
+def test_task_frontend_cwd_rejected_when_project_has_no_frontend(tmp_path: Path) -> None:
+    body = """
+projects:
+  - name: ApiOnly
+    url: http://localhost:8000
+    backend:
+      path: D:\\\\projects\\\\api-only
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+    tasks:
+      - name: Web tests
+        cwd: frontend
+        command: npm test
+"""
+    with pytest.raises(config.ConfigError, match="frontend tasks require a configured frontend"):
+        config.load(write_config(tmp_path, body))
 
 
 def test_task_rejects_invalid_cwd(tmp_path: Path) -> None:
