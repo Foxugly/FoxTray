@@ -80,7 +80,13 @@ def test_start_stops_existing_active_first(
     tmp_appdata: Path, sample_project: config.Project, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(project.health, "wait_port_free", lambda *args, **kwargs: True)
-    state.save(state.State(active=state.ActiveProject(name="Prev", backend_pid=11, frontend_pid=22)))
+    # pid_alive returns True so _kill_pair actually invokes kill_tree on the
+    # previously-active PIDs (the point of this test).
+    monkeypatch.setattr(project.state, "pid_alive", lambda pid, ctime: True)
+    state.save(state.State(active=state.ActiveProject(
+        name="Prev", backend_pid=11, frontend_pid=22,
+        backend_create_time=1.0, frontend_create_time=2.0,
+    )))
     manager = _FakeManager()
     orchestrator = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
 
@@ -99,9 +105,14 @@ def test_start_stops_existing_active_first(
 
 
 def test_stop_clears_state_and_kills_tree(
-    tmp_appdata: Path, sample_project: config.Project
+    tmp_appdata: Path, sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    state.save(state.State(active=state.ActiveProject(name="Demo", backend_pid=77, frontend_pid=88)))
+    monkeypatch.setattr(project.state, "pid_alive", lambda pid, ctime: True)
+    state.save(state.State(active=state.ActiveProject(
+        name="Demo", backend_pid=77, frontend_pid=88,
+        backend_create_time=1.0, frontend_create_time=2.0,
+    )))
     manager = _FakeManager()
     orchestrator = project.Orchestrator(manager=manager, cfg=_cfg_with(sample_project))
 
@@ -134,12 +145,17 @@ def test_status_alive_when_pids_exist(
     backend_proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     frontend_proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
+        # Capture the real create_time so pid_alive accepts the identity.
+        backend_ctime = psutil.Process(backend_proc.pid).create_time()
+        frontend_ctime = psutil.Process(frontend_proc.pid).create_time()
         state.save(
             state.State(
                 active=state.ActiveProject(
                     name="Demo",
                     backend_pid=backend_proc.pid,
                     frontend_pid=frontend_proc.pid,
+                    backend_create_time=backend_ctime,
+                    frontend_create_time=frontend_ctime,
                 )
             )
         )
@@ -200,9 +216,10 @@ def test_wait_healthy_returns_true_immediately_on_url_ok(
 ) -> None:
     # Seed state so status() treats the project as active and both PIDs alive
     state.save(state.State(active=state.ActiveProject(
-        name="Demo", backend_pid=1, frontend_pid=2
+        name="Demo", backend_pid=1, frontend_pid=2,
+        backend_create_time=1.0, frontend_create_time=2.0,
     )))
-    monkeypatch.setattr(project.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(project.state, "pid_alive", lambda pid, ctime: True)
     monkeypatch.setattr(project.health, "http_ok", lambda url, timeout=1.0: True)
 
     orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
@@ -217,7 +234,7 @@ def test_wait_healthy_returns_false_on_timeout(
     state.save(state.State(active=state.ActiveProject(
         name="Demo", backend_pid=1, frontend_pid=2
     )))
-    monkeypatch.setattr(project.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(project.state, "pid_alive", lambda pid, ctime: True)
     monkeypatch.setattr(project.health, "http_ok", lambda url, timeout=1.0: False)
 
     # Fake clock: time jumps forward by 5s on every sleep() call.
@@ -357,7 +374,7 @@ def test_start_calls_wait_port_free_with_3s_timeout(
             pass
 
 
-def test_status_uses_health_url_when_set(
+def test_refresh_url_ok_uses_health_url_when_set(
     tmp_appdata: Path,
     sample_project: config.Project,
     monkeypatch: pytest.MonkeyPatch,
@@ -373,10 +390,6 @@ def test_status_uses_health_url_when_set(
         path_root=sample_project.path_root,
         health_url=custom_url,
     )
-    state.save(state.State(active=state.ActiveProject(
-        name=proj_with_health.name, backend_pid=1, frontend_pid=2
-    )))
-    monkeypatch.setattr(project.psutil, "pid_exists", lambda pid: True)
     captured: list[str] = []
     def _fake_http_ok(url: str, timeout: float = 1.0) -> bool:
         captured.append(url)
@@ -384,20 +397,16 @@ def test_status_uses_health_url_when_set(
     monkeypatch.setattr(project.health, "http_ok", _fake_http_ok)
 
     orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(proj_with_health))
-    orch.status(proj_with_health)
+    orch.refresh_url_ok(proj_with_health)
     assert captured == [custom_url]
 
 
-def test_status_falls_back_to_url_when_no_health_url(
+def test_refresh_url_ok_falls_back_to_url_when_no_health_url(
     tmp_appdata: Path,
     sample_project: config.Project,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # sample_project has health_url=None
-    state.save(state.State(active=state.ActiveProject(
-        name=sample_project.name, backend_pid=1, frontend_pid=2
-    )))
-    monkeypatch.setattr(project.psutil, "pid_exists", lambda pid: True)
     captured: list[str] = []
     def _fake_http_ok(url: str, timeout: float = 1.0) -> bool:
         captured.append(url)
@@ -405,8 +414,62 @@ def test_status_falls_back_to_url_when_no_health_url(
     monkeypatch.setattr(project.health, "http_ok", _fake_http_ok)
 
     orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
-    orch.status(sample_project)
+    orch.refresh_url_ok(sample_project)
     assert captured == [sample_project.url]
+
+
+def test_status_reads_url_ok_from_cache_never_blocks(
+    tmp_appdata: Path,
+    sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """status() MUST NOT call http_ok — a blocking HTTP request on the tray
+    poll thread stalls the tick up to 1 s. It must read the cached value
+    populated by the url refresher worker."""
+    state.save(state.State(active=state.ActiveProject(
+        name=sample_project.name, backend_pid=1, frontend_pid=2,
+        backend_create_time=1.0, frontend_create_time=2.0,
+    )))
+    monkeypatch.setattr(project.state, "pid_alive", lambda pid, ctime: True)
+    http_calls: list[str] = []
+    monkeypatch.setattr(
+        project.health, "http_ok",
+        lambda url, timeout=1.0: http_calls.append(url) or True,  # noqa: BLE001
+    )
+
+    orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
+    # Cache starts empty — status should return url_ok=False without any HTTP.
+    assert orch.status(sample_project).url_ok is False
+    assert http_calls == []
+
+    # After a refresh, the cache has the value and status reflects it.
+    orch.refresh_url_ok(sample_project)
+    assert http_calls == [sample_project.url]
+    status = orch.status(sample_project)
+    assert status.url_ok is True
+    # Subsequent status() calls add no HTTP calls.
+    orch.status(sample_project)
+    orch.status(sample_project)
+    assert len(http_calls) == 1
+
+
+def test_status_forces_url_ok_false_when_pids_dead(
+    tmp_appdata: Path,
+    sample_project: config.Project,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale ``True`` in the cache must not survive the process dying.
+    status() overrides the cache with False whenever the pids aren't alive."""
+    state.save(state.State(active=state.ActiveProject(
+        name=sample_project.name, backend_pid=1, frontend_pid=2,
+        backend_create_time=1.0, frontend_create_time=2.0,
+    )))
+    monkeypatch.setattr(project.state, "pid_alive", lambda pid, ctime: False)
+    orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))
+    # Pretend the cache got set when the project was still alive.
+    with orch._url_ok_lock:
+        orch._url_ok[sample_project.name] = True
+    assert orch.status(sample_project).url_ok is False
 
 
 def test_start_without_frontend_only_launches_backend(
@@ -447,7 +510,7 @@ def test_status_running_without_frontend_when_backend_alive(
     state.save(state.State(active=state.ActiveProject(
         name=backend_only.name, backend_pid=1, frontend_pid=None
     )))
-    monkeypatch.setattr(project.psutil, "pid_exists", lambda pid: True)
+    monkeypatch.setattr(project.state, "pid_alive", lambda pid, ctime: True)
     monkeypatch.setattr(project.health, "http_ok", lambda url, timeout=1.0: True)
 
     status = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(backend_only)).status(backend_only)
