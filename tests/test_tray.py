@@ -175,6 +175,9 @@ def _noop_handlers() -> tray.Handlers:
         on_run_task=lambda p, t: None,
         on_run_script=lambda s: None,
         on_about=lambda: None,
+        on_restart=lambda p: None,
+        on_open_logs_folder=lambda: None,
+        on_copy_url=lambda u: None,
     )
 
 
@@ -412,6 +415,9 @@ def _noop_handlers_with_tasks() -> tray.Handlers:
         on_run_task=lambda p, t: None,
         on_run_script=lambda s: None,
         on_about=lambda: None,
+        on_restart=lambda p: None,
+        on_open_logs_folder=lambda: None,
+        on_copy_url=lambda u: None,
     )
 
 
@@ -518,3 +524,71 @@ def test_menu_has_about_entry() -> None:
     texts = [i.text for i in non_sep]
     assert "About" in texts
     assert texts.index("About") > texts.index("Stop all and exit")
+
+
+def test_menu_running_project_has_restart_entry() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
+    statuses = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
+    items = tray.build_menu_items(
+        cfg, active, statuses, _noop_handlers(),
+        running_tasks=set(),
+    )
+    submenu_texts = [s.text for s in items[0].submenu]
+    assert "Restart" in submenu_texts
+
+
+def test_menu_stopped_project_has_no_restart_entry() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers(),
+        running_tasks=set(),
+    )
+    submenu_texts = [s.text for s in items[0].submenu]
+    assert "Restart" not in submenu_texts
+
+
+def test_menu_project_always_has_copy_url_entry() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers(),
+        running_tasks=set(),
+    )
+    submenu_texts = [s.text for s in items[0].submenu]
+    assert "Copy URL" in submenu_texts
+
+
+def test_menu_project_without_path_root_has_no_open_project_entry() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers(),
+        running_tasks=set(),
+    )
+    submenu_texts = [s.text for s in items[0].submenu]
+    assert "Open project folder" not in submenu_texts
+
+
+def test_menu_project_with_path_root_has_open_project_entry() -> None:
+    base = _project("A")
+    project_with_root = config.Project(
+        name=base.name, url=base.url, backend=base.backend, frontend=base.frontend,
+        start_timeout=base.start_timeout, tasks=base.tasks,
+        path_root=Path("D:\\\\repos\\\\A"),
+    )
+    cfg = config.Config(projects=[project_with_root])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers(),
+        running_tasks=set(),
+    )
+    submenu_texts = [s.text for s in items[0].submenu]
+    assert "Open project folder" in submenu_texts
+
+
+def test_menu_root_has_open_logs_folder_entry() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers(),
+        running_tasks=set(),
+    )
+    root_texts = [i.text for i in items if not i.separator and not i.submenu]
+    assert "Open logs folder" in root_texts

@@ -53,6 +53,9 @@ class Handlers:
     on_run_task: Callable[[config_mod.Project, config_mod.Task], None]
     on_run_script: Callable[[config_mod.Script], None]
     on_about: Callable[[], None]
+    on_restart: Callable[[config_mod.Project], None]
+    on_open_logs_folder: Callable[[], None]
+    on_copy_url: Callable[[str], None]
 
 
 def _status_to_icon_state(status: ProjectStatus) -> IconState:
@@ -201,6 +204,20 @@ def _project_submenu(
             action=lambda path=project.frontend.path: handlers.on_open_folder(path),
         ),
     ]
+    if not is_stopped:
+        entries.append(MenuItemSpec(
+            text="Restart",
+            action=lambda p=project: handlers.on_restart(p),
+        ))
+    entries.append(MenuItemSpec(
+        text="Copy URL",
+        action=lambda u=project.url: handlers.on_copy_url(u),
+    ))
+    if project.path_root is not None:
+        entries.append(MenuItemSpec(
+            text="Open project folder",
+            action=lambda path=project.path_root: handlers.on_open_folder(path),
+        ))
     if project.tasks:
         task_specs = tuple(
             _task_spec(project, task, handlers, running_tasks)
@@ -251,6 +268,11 @@ def build_menu_items(
         )
         items.append(MenuItemSpec(text="Scripts", submenu=script_specs))
     items.append(MenuItemSpec(text="", separator=True))
+    items.append(MenuItemSpec(
+        text="Open logs folder",
+        action=handlers.on_open_logs_folder,
+    ))
+    items.append(MenuItemSpec(text="", separator=True))
     items.append(
         MenuItemSpec(
             text="Stop all",
@@ -286,6 +308,26 @@ def _script_spec(
         text=script.name,
         action=lambda s=script: handlers.on_run_script(s),
     )
+
+
+def _tooltip_text(
+    active: state_mod.ActiveProject | None,
+    statuses: dict[str, ProjectStatus],
+) -> str:
+    if active is None:
+        return "FoxTray — idle"
+    status = statuses.get(active.name)
+    if status is None:
+        return f"FoxTray — {active.name} (unknown)"
+    if status.backend_alive and status.frontend_alive and status.url_ok:
+        return f"FoxTray — {active.name} RUNNING"
+    if status.backend_alive and status.frontend_alive:
+        return f"FoxTray — {active.name} (starting…)"
+    if status.backend_alive:
+        return f"FoxTray — {active.name} PARTIAL (frontend down)"
+    if status.frontend_alive:
+        return f"FoxTray — {active.name} PARTIAL (backend down)"
+    return f"FoxTray — {active.name} stopped"
 
 
 class TrayApp:
@@ -376,6 +418,11 @@ class TrayApp:
                     curr_active.name if curr_active else "?",
                 )
                 self._prev_active = None
+
+            try:
+                self._icon.title = _tooltip_text(curr_active, curr_statuses)
+            except Exception:  # noqa: BLE001
+                log.warning("tooltip update failed", exc_info=True)
         except Exception:  # noqa: BLE001 — poll loop must never die
             log.warning("poll tick failed", exc_info=True)
 
@@ -448,6 +495,9 @@ class TrayApp:
             on_run_task=lambda p, t: actions.on_run_task(tm, p, t, icon),
             on_run_script=lambda s: actions.on_run_script(tm, s, icon),
             on_about=lambda: actions.on_about(icon),
+            on_restart=lambda p: actions.on_restart(orch, p, icon, self._user_initiated_stop),
+            on_open_logs_folder=lambda: actions.on_open_logs_folder(icon),
+            on_copy_url=lambda url: actions.on_copy_url(url, icon),
         )
 
 

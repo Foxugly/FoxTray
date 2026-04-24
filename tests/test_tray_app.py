@@ -50,6 +50,7 @@ class _FakeIcon:
     icon: Any = None
     notifications: list[tuple[str, str]] = field(default_factory=list)
     stopped: bool = False
+    title: str = "FoxTray"
 
     def notify(self, message: str, title: str = "") -> None:
         self.notifications.append((title, message))
@@ -316,3 +317,26 @@ def test_on_task_complete_fires_failed_balloon_on_nonzero(
 
     app._on_task_complete("script:Git pull", 2)
     assert any("Git pull failed" in message for _t, message in icon.notifications)
+
+
+def test_poll_tick_updates_icon_title_with_status(
+    tmp_appdata: Path, monkeypatch: Any
+) -> None:
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(
+        next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
+    )
+    icon = _FakeIcon(icon=icons.load("stopped"))
+    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
+    app._icon = icon
+    state.save(state.State(active=state.ActiveProject(
+        name="A", backend_pid=1, frontend_pid=2
+    )))
+    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: True)
+    monkeypatch.setattr("foxtray.project.psutil.pid_exists", lambda pid: True)
+
+    app._poll_tick()
+
+    assert hasattr(icon, "title")
+    assert "RUNNING" in icon.title
+    assert "A" in icon.title
