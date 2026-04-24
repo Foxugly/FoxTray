@@ -503,6 +503,10 @@ def test_about_body_includes_version() -> None:
     assert __version__ in actions._ABOUT_BODY
 
 
+def test_about_icon_path_points_to_foxtray_ico() -> None:
+    assert actions._about_icon_path().name == "foxtray.ico"
+
+
 def test_on_toggle_autostart_enables_when_currently_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -6,12 +6,14 @@ import os
 import subprocess
 import sys
 import threading
+import tkinter as tk
 import webbrowser
 from pathlib import Path
 from typing import Callable, Protocol, Sequence
 
 from foxtray import __version__, config, tasks
 from foxtray.project import Orchestrator
+from foxtray.ui import icons
 
 log = logging.getLogger(__name__)
 
@@ -198,11 +200,87 @@ _ABOUT_BODY = (
 _about_dialog_open = threading.Event()
 
 
+def _about_icon_path() -> Path:
+    return icons._assets_dir() / "foxtray.ico"
+
+
 def _show_about_dialog(title: str, body: str) -> None:
-    """Open a native Windows MessageBox. Extracted so tests can monkeypatch."""
-    import ctypes
-    # MB_OK = 0x0, MB_ICONINFORMATION = 0x40
-    ctypes.windll.user32.MessageBoxW(0, body, title, 0x40)
+    """Open a small native-feeling About window with clickable links."""
+    from PIL import Image, ImageTk
+
+    root = tk.Tk()
+    root.title(title)
+    root.resizable(False, False)
+    root.configure(padx=16, pady=16)
+
+    try:
+        root.iconbitmap(str(_about_icon_path()))
+    except Exception:
+        pass
+
+    root.attributes("-topmost", True)
+    root.after(250, lambda: root.attributes("-topmost", False))
+
+    icon_label = None
+    image = None
+    try:
+        image = ImageTk.PhotoImage(Image.open(_about_icon_path()).resize((32, 32)))
+        icon_label = tk.Label(root, image=image)
+        icon_label.image = image
+        icon_label.grid(row=0, column=0, rowspan=2, padx=(0, 12), sticky="n")
+    except Exception:
+        pass
+
+    lines = body.splitlines()
+    headline = lines[0]
+    description = lines[1] if len(lines) > 1 else ""
+
+    tk.Label(
+        root,
+        text=headline,
+        font=("Segoe UI", 11, "bold"),
+        anchor="w",
+        justify="left",
+    ).grid(row=0, column=1, sticky="w")
+    tk.Label(
+        root,
+        text=description,
+        anchor="w",
+        justify="left",
+        wraplength=360,
+    ).grid(row=1, column=1, sticky="w", pady=(0, 10))
+
+    details = tk.Frame(root)
+    details.grid(row=2, column=0, columnspan=2, sticky="w")
+
+    tk.Label(details, text="Author: Foxugly", anchor="w", justify="left").grid(
+        row=0, column=0, sticky="w", pady=(0, 4)
+    )
+
+    def _add_link(row: int, label: str, url: str) -> None:
+        tk.Label(details, text=f"{label}:", anchor="w", justify="left").grid(
+            row=row, column=0, sticky="w"
+        )
+        link = tk.Label(
+            details,
+            text=url,
+            fg="#0a66cc",
+            cursor="hand2",
+            anchor="w",
+            justify="left",
+        )
+        link.grid(row=row, column=1, sticky="w", padx=(6, 0))
+        link.bind("<Button-1>", lambda _event, target=url: _open_url(target))
+
+    _add_link(1, "Website", "https://foxugly.com")
+    _add_link(2, "Repository", "https://github.com/Foxugly/FoxTray")
+
+    buttons = tk.Frame(root)
+    buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(14, 0))
+    tk.Button(buttons, text="OK", width=10, command=root.destroy).pack()
+
+    root.protocol("WM_DELETE_WINDOW", root.destroy)
+    root.mainloop()
 
 
 def on_about(icon: Notifier) -> None:
