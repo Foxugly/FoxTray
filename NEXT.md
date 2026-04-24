@@ -42,42 +42,28 @@ Before any manual test:
 
 ## 2. GitHub Actions CI
 
-The workflow at `.github/workflows/test.yml` runs `pytest` on `windows-latest` + Python 3.14.
+The workflow at `.github/workflows/test.yml` runs `pytest` on `windows-latest` + Python 3.14 with `allow-prereleases: true` pre-configured (so the first CI run shouldn't choke if 3.14 is still flagged as a pre-release on the runner).
 
 **Check the first run:** https://github.com/Foxugly/FoxTray/actions
 
-**Likely first-run issue:** `actions/setup-python@v5` may not yet offer Python 3.14 as a prebuilt — in that case the job will either download the installer (slower but works) or fail. If it fails, edit `.github/workflows/test.yml`:
-
-```yaml
-      - name: Set up Python 3.14
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-          allow-prereleases: true   # add this line
-```
-
-Or downgrade to `"3.13"` if 3.14 isn't ready yet — the codebase uses no 3.14-exclusive features.
+If it still fails, downgrade the workflow to `python-version: "3.13"` — the codebase uses no 3.14-exclusive features.
 
 ---
 
 ## 3. Building the standalone `FoxTray.exe`
 
-One-time install:
+PyInstaller 6.20 is already installed in the venv and a first test build has been verified: `dist/FoxTray.exe` (~19.7 MB) runs the CLI correctly when `config.yaml` is placed next to it (`list`, `validate` both work). Iter 4c is end-to-end validated.
 
-```powershell
-./.venv/Scripts/python.exe -m pip install pyinstaller>=6.0
-```
-
-Build (whenever `.py`, assets, or `__version__` change):
+To rebuild whenever `.py`, assets, or `__version__` change:
 
 ```powershell
 ./.venv/Scripts/python.exe scripts/gen_icons.py
 ./.venv/Scripts/python.exe -m PyInstaller --clean --noconfirm foxtray.spec
 ```
 
-Output: `dist/FoxTray.exe` (~25-35 MB). Distribute by copying that file + a `config.yaml` to a folder of your choice.
+Distribute by copying `dist/FoxTray.exe` + a `config.yaml` to a folder of your choice. See `docs/packaging.md` for the reference.
 
-See `docs/packaging.md` for the reference.
+Still to validate manually: tray-icon UI behavior of the bundled `.exe` (balloons, menu interactions, icon colour transitions). Covered in `docs/manual-tests/iter4c.md`.
 
 ---
 
@@ -178,6 +164,6 @@ Specs exist; no implementation yet.
 
 ## 6. Known issues (not blocking)
 
-- `frontend_port_listening` reports `False` while `url_ok` is `True` for Angular dev server (observed in Iter 3 smoke). Likely Angular binding IPv6 while our `port_listening` checks IPv4. Cosmetic — doesn't affect health check.
+- ~~`frontend_port_listening` reports `False` for Angular dev server because of IPv6-only binding~~ — **fixed**: `port_listening` now probes IPv4 then IPv6 by default (commit `7fd847f`).
 - Unsigned `.exe` may trigger Windows Defender / third-party AV false positives on first launch. Mitigation deferred (code signing).
 - Tray tooltip updates on the 3 s poll cadence, not instantly.
