@@ -156,3 +156,27 @@ def on_run_script(
         icon.notify(f"{script.name} is already running", title="FoxTray")
     except Exception as exc:  # noqa: BLE001
         _notify_error(icon, exc)
+
+
+_ABOUT_TITLE = "About FoxTray"
+_ABOUT_BODY = (
+    "FoxTray\n"
+    "Windows tray launcher for Django + Angular project pairs.\n\n"
+    "Author: Foxugly\n"
+    "Website: https://foxugly.com\n"
+    "Repository: https://github.com/Foxugly/FoxTray"
+)
+
+
+def _show_about_dialog(title: str, body: str) -> None:
+    """Open a native Windows MessageBox. Extracted so tests can monkeypatch."""
+    import ctypes
+    # MB_OK = 0x0, MB_ICONINFORMATION = 0x40
+    ctypes.windll.user32.MessageBoxW(0, body, title, 0x40)
+
+
+def on_about(icon: Notifier) -> None:
+    try:
+        _show_about_dialog(_ABOUT_TITLE, _ABOUT_BODY)
+    except Exception as exc:  # noqa: BLE001 — MessageBoxW failure must not crash tray
+        _notify_error(icon, exc)

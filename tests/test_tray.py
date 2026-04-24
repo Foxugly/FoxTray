@@ -174,6 +174,7 @@ def _noop_handlers() -> tray.Handlers:
         on_stop_all_and_exit=lambda: None,
         on_run_task=lambda p, t: None,
         on_run_script=lambda s: None,
+        on_about=lambda: None,
     )
 
 
@@ -410,6 +411,7 @@ def _noop_handlers_with_tasks() -> tray.Handlers:
         on_stop_all_and_exit=lambda: None,
         on_run_task=lambda p, t: None,
         on_run_script=lambda s: None,
+        on_about=lambda: None,
     )
 
 
@@ -504,3 +506,15 @@ def test_menu_scripts_item_placed_before_stop_all() -> None:
     scripts_idx = next(i for i, e in enumerate(non_sep) if e.text == "Scripts")
     stop_all_idx = next(i for i, e in enumerate(non_sep) if e.text == "Stop all")
     assert scripts_idx < stop_all_idx
+
+
+def test_menu_has_about_entry() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers(),
+        running_tasks=set(),
+    )
+    non_sep = [i for i in items if not i.separator]
+    texts = [i.text for i in non_sep]
+    assert "About" in texts
+    assert texts.index("About") > texts.index("Stop all and exit")

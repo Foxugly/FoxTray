@@ -299,3 +299,31 @@ def test_on_stop_all_and_exit_calls_kill_all_and_stop_all() -> None:
     assert orch.stop_all_called == 1
     assert icon.stopped is True
     # kill_all was invoked (0 in this case — silent)
+
+
+def test_on_about_calls_show_dialog_with_title_and_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        actions, "_show_about_dialog",
+        lambda title, body: recorded.append((title, body)),
+    )
+    actions.on_about(_FakeIcon())
+    assert len(recorded) == 1
+    title, body = recorded[0]
+    assert "About" in title
+    assert "Foxugly" in body
+    assert "foxugly.com" in body
+    assert "Foxugly/FoxTray" in body
+
+
+def test_on_about_notifies_on_dialog_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(title: str, body: str) -> None:
+        raise RuntimeError("boom")
+    monkeypatch.setattr(actions, "_show_about_dialog", _boom)
+    icon = _FakeIcon()
+    actions.on_about(icon)
+    assert icon.notifications == [("FoxTray error", "boom")]

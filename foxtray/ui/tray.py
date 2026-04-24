@@ -52,6 +52,7 @@ class Handlers:
     on_stop_all_and_exit: Callable[[], None]
     on_run_task: Callable[[config_mod.Project, config_mod.Task], None]
     on_run_script: Callable[[config_mod.Script], None]
+    on_about: Callable[[], None]
 
 
 def _status_to_icon_state(status: ProjectStatus) -> IconState:
@@ -266,6 +267,8 @@ def build_menu_items(
             enabled=active is not None,
         )
     )
+    items.append(MenuItemSpec(text="", separator=True))
+    items.append(MenuItemSpec(text="About", action=handlers.on_about))
     return items
 
 
@@ -444,6 +447,7 @@ class TrayApp:
             ),
             on_run_task=lambda p, t: actions.on_run_task(tm, p, t, icon),
             on_run_script=lambda s: actions.on_run_script(tm, s, icon),
+            on_about=lambda: actions.on_about(icon),
         )
 
 
