@@ -130,6 +130,52 @@ def _require(mapping: dict[str, Any], key: str, context: str) -> Any:
     return mapping[key]
 
 
+# Windows reserved device names (case-insensitive, with or without extension).
+# Using one of these as a file name is forbidden at the NT layer.
+_WINDOWS_RESERVED_NAMES = frozenset({
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+})
+
+# Chars that cannot appear in a Windows file name.
+_FORBIDDEN_NAME_CHARS = frozenset('\\/:*?"<>|')
+
+
+def _validate_name(name: Any, context: str) -> str:
+    """Validate that ``name`` is safe for use as a filesystem component.
+
+    Names flow into log paths via ``paths.log_file`` / ``paths.task_log_file``.
+    Without this gate, a YAML like ``name: "../evil"`` or ``name: "CON"``
+    would either traverse out of the logs dir or hit Windows reserved-name
+    errors. Accepts: letters, digits, space, and ``. - _`` ; length ≤ 64.
+    """
+    if not isinstance(name, str) or not name:
+        raise ConfigError(f"{context}: name must be a non-empty string")
+    if len(name) > 64:
+        raise ConfigError(f"{context}: name too long ({len(name)} > 64)")
+    if name in {".", ".."}:
+        raise ConfigError(f"{context}: name cannot be {name!r}")
+    for ch in name:
+        if ch in _FORBIDDEN_NAME_CHARS or ord(ch) < 0x20:
+            raise ConfigError(
+                f"{context}: name contains forbidden character {ch!r} in {name!r}"
+            )
+    # Windows strips trailing dots/spaces from file names silently — better to
+    # reject them outright than let the log file end up with a different name
+    # than the project name.
+    if name != name.strip(" .") or name.endswith((" ", ".")):
+        raise ConfigError(
+            f"{context}: name cannot start or end with space or dot: {name!r}"
+        )
+    stem = name.split(".", 1)[0]
+    if stem.upper() in _WINDOWS_RESERVED_NAMES:
+        raise ConfigError(
+            f"{context}: name {name!r} is a Windows reserved device name"
+        )
+    return name
+
+
 def _parse_backend(raw: dict[str, Any]) -> Backend:
     backend = Backend(
         path=_expand_path(_require(raw, "path", "backend")),
@@ -155,9 +201,10 @@ def _parse_frontend(raw: dict[str, Any] | None) -> Frontend | None:
 def _parse_task(raw: dict[str, Any], project_name: str) -> Task:
     if not isinstance(raw, dict):
         raise ConfigError(f"project {project_name!r}: each task must be a mapping")
-    name = _require(raw, "name", f"project {project_name!r} task")
-    if not isinstance(name, str) or not name:
-        raise ConfigError(f"project {project_name!r}: task name must be a non-empty string")
+    name = _validate_name(
+        _require(raw, "name", f"project {project_name!r} task"),
+        f"project {project_name!r} task",
+    )
     cwd = _require(raw, "cwd", f"project {project_name!r} task {name!r}")
     if cwd not in ("backend", "frontend"):
         raise ConfigError(
@@ -172,7 +219,7 @@ def _parse_task(raw: dict[str, Any], project_name: str) -> Task:
 
 
 def _parse_project(raw: dict[str, Any]) -> Project:
-    name = _require(raw, "name", "project")
+    name = _validate_name(_require(raw, "name", "project"), "project")
     start_timeout_raw = raw.get("start_timeout", 30)
     if not isinstance(start_timeout_raw, int) or isinstance(start_timeout_raw, bool):
         raise ConfigError(
@@ -225,9 +272,7 @@ def _parse_project(raw: dict[str, Any]) -> Project:
 def _parse_script(raw: dict[str, Any]) -> Script:
     if not isinstance(raw, dict):
         raise ConfigError("each script must be a mapping")
-    name = _require(raw, "name", "script")
-    if not isinstance(name, str) or not name:
-        raise ConfigError("script name must be a non-empty string")
+    name = _validate_name(_require(raw, "name", "script"), "script")
     path_raw = _require(raw, "path", f"script {name!r}")
     path = _expand_path(path_raw)
     if not path.is_absolute():

@@ -252,6 +252,88 @@ def test_task_rejects_missing_name(tmp_path: Path) -> None:
         config.load(write_config(tmp_path, yaml))
 
 
+# --- Name validation: stops config-driven filesystem injection -------------
+
+def _base_project_yaml(name: str) -> str:
+    return f"""
+projects:
+  - name: {name!r}
+    url: http://localhost:8000
+    backend:
+      path: D:\\\\projects\\\\x
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+"""
+
+
+@pytest.mark.parametrize("bad_name", [
+    "../evil",           # path traversal
+    "a/b",               # forward slash
+    "a\\b",              # backslash
+    "a:b",               # colon (drive letter syntax, also reserved)
+    "a*b", "a?b", 'a"b', "a<b", "a>b", "a|b",  # Windows-forbidden chars
+    "CON", "con", "PRN", "NUL", "AUX", "COM1", "LPT9",  # reserved device names
+    "CON.log",           # reserved stem even with extension
+    "ends-with-space ", # trailing space stripped silently by Windows
+    "ends-with-dot.",    # trailing dot stripped silently by Windows
+    ".",                 # current dir
+    "..",                # parent dir
+    "",                  # empty
+    "a\x00b",            # NUL byte
+    "a\tb",              # control char
+    "x" * 65,            # over length limit
+])
+def test_project_name_rejects_unsafe_values(tmp_path: Path, bad_name: str) -> None:
+    body = _base_project_yaml(bad_name)
+    with pytest.raises(config.ConfigError, match="name"):
+        config.load(write_config(tmp_path, body))
+
+
+@pytest.mark.parametrize("good_name", [
+    "FoxRunner",
+    "my-project_01",
+    "Client Portal",
+    "v1.2.3",
+    "a",
+])
+def test_project_name_accepts_safe_values(tmp_path: Path, good_name: str) -> None:
+    body = _base_project_yaml(good_name)
+    cfg = config.load(write_config(tmp_path, body))
+    assert cfg.projects[0].name == good_name
+
+
+def test_task_name_rejects_path_traversal(tmp_path: Path) -> None:
+    body = """
+projects:
+  - name: P
+    url: http://localhost:8000
+    backend:
+      path: D:\\\\projects\\\\x
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+    tasks:
+      - name: "../escape"
+        cwd: backend
+        command: python -c "pass"
+"""
+    with pytest.raises(config.ConfigError, match="name"):
+        config.load(write_config(tmp_path, body))
+
+
+def test_script_name_rejects_reserved_device_name(tmp_path: Path) -> None:
+    body = """
+projects: []
+scripts:
+  - name: NUL
+    path: C:\\\\tools
+    command: echo hi
+"""
+    with pytest.raises(config.ConfigError, match="reserved"):
+        config.load(write_config(tmp_path, body))
+
+
 SCRIPTS_YAML = """
 projects:
   - name: FoxRunner
