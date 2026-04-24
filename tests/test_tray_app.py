@@ -15,6 +15,21 @@ class _StubProcessManager:
         raise RuntimeError("ProcessManager.start unused in tests")
 
 
+class _StubToastManager:
+    """No-op replacement so tests never spin up a real Tk root."""
+    def __init__(self) -> None:
+        self.shown: list[tuple[str, str, str]] = []
+
+    def start(self, timeout: float = 3.0) -> None:
+        pass
+
+    def stop(self, timeout: float = 2.0) -> None:
+        pass
+
+    def show(self, title: str, message: str, url: str) -> None:
+        self.shown.append((title, message, url))
+
+
 def _project(name: str) -> config.Project:
     return config.Project(
         name=name,
@@ -92,13 +107,13 @@ def test_poll_tick_sets_icon_to_running_and_notifies(
         next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
     )
     icon = _FakeIcon(icon=icons.load("stopped"))
-    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
     app._icon = icon  # inject fake
     recorded: list[tuple[str, str]] = []
     monkeypatch.setattr(
         tray.actions,
         "notify_project_up",
-        lambda project, icon: recorded.append((project.name, project.url)),
+        lambda project, icon, show_toast=None: recorded.append((project.name, project.url)),
     )
 
     # Simulate CLI having just set state to active A
@@ -106,7 +121,7 @@ def test_poll_tick_sets_icon_to_running_and_notifies(
         name="A", backend_pid=1, frontend_pid=2
     )))
     # Keep fake PIDs alive so orphan-clear is a no-op inside this tick.
-    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: True)
+    monkeypatch.setattr("foxtray.state.pid_alive", lambda pid, ctime: True)
 
     app._poll_tick()
 
@@ -123,13 +138,13 @@ def test_poll_tick_no_notifications_on_stable_state(
         next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
     )
     icon = _FakeIcon(icon=icons.load("running"))
-    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
     app._icon = icon
     state.save(state.State(active=state.ActiveProject(
         name="A", backend_pid=1, frontend_pid=2
     )))
     # Keep fake PIDs alive so orphan-clear is a no-op across both ticks.
-    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: True)
+    monkeypatch.setattr("foxtray.state.pid_alive", lambda pid, ctime: True)
 
     # First tick: transition from baseline (nothing) to running → notify.
     app._poll_tick()
@@ -148,13 +163,13 @@ def test_poll_tick_running_to_partial_notifies_crash(
         next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
     )
     icon = _FakeIcon(icon=icons.load("stopped"))
-    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
     app._icon = icon
     state.save(state.State(active=state.ActiveProject(
         name="A", backend_pid=1, frontend_pid=2
     )))
     # Keep fake PIDs alive so orphan-clear is a no-op across both ticks.
-    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: True)
+    monkeypatch.setattr("foxtray.state.pid_alive", lambda pid, ctime: True)
 
     # Tick 1: both alive → running.
     app._poll_tick()
@@ -178,7 +193,7 @@ def test_poll_tick_survives_orchestrator_exception(
 
     cfg = config.Config(projects=[_project("A")])
     icon = _FakeIcon(icon=icons.load("stopped"))
-    app = tray.TrayApp(cfg, _Broken(), _StubProcessManager())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, _Broken(), _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
     app._icon = icon
 
     # Must not raise.
@@ -198,7 +213,7 @@ def test_run_calls_clear_if_orphaned(
 
     cfg = config.Config(projects=[_project("A")])
     orch = _FakeOrchestrator(next_statuses={"A": _status()})
-    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
 
     # We can't actually run pystray in a test. Monkeypatch pystray.Icon to a stub
     # that immediately returns from .run() so TrayApp.run() finishes.
@@ -223,7 +238,7 @@ def test_poll_tick_clears_orphan_at_end(
     # Both PIDs dead: status() returns both_alive=False, url_ok=False
     orch = _FakeOrchestrator(next_statuses={"A": _status()})
     icon = _FakeIcon(icon=icons.load("running"))  # starts as running
-    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
     app._icon = icon
     # Seed prev_active so _poll_tick sees a running → stopped transition
     app._prev_active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
@@ -235,7 +250,7 @@ def test_poll_tick_clears_orphan_at_end(
         name="A", backend_pid=1, frontend_pid=2
     )))
     # pid_exists returns False for both → clear_if_orphaned will fire
-    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: False)
+    monkeypatch.setattr("foxtray.state.pid_alive", lambda pid, ctime: False)
 
     app._poll_tick()
 
@@ -256,19 +271,19 @@ def test_poll_tick_passes_pending_starts_into_compute_transitions(
     )
     orch.pending_starts.add("A")
     icon = _FakeIcon(icon=icons.load("stopped"))
-    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
     app._icon = icon
     recorded: list[str] = []
     monkeypatch.setattr(
         tray.actions,
         "notify_project_up",
-        lambda project, icon: recorded.append(project.url),
+        lambda project, icon, show_toast=None: recorded.append(project.url),
     )
     state.save(state.State(active=state.ActiveProject(
         name="A", backend_pid=1, frontend_pid=2
     )))
     # pid_exists True so status() considers procs alive
-    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: True)
+    monkeypatch.setattr("foxtray.state.pid_alive", lambda pid, ctime: True)
     monkeypatch.setattr("foxtray.project.psutil.pid_exists", lambda pid: True)
 
     app._poll_tick()
@@ -298,7 +313,7 @@ def test_trayapp_creates_task_manager_with_kill_tree_from_process_manager(
             raise RuntimeError("should not be called")
 
     pm = _StubProcessManager()
-    app = tray.TrayApp(cfg, orch, pm)  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, pm, toast_manager=_StubToastManager())  # type: ignore[arg-type]
     assert app._task_manager is not None
 
 
@@ -316,7 +331,7 @@ def test_on_task_complete_fires_done_balloon_on_zero_exit(
             raise RuntimeError
 
     icon = _FakeIcon(icon=None)
-    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
     app._icon = icon  # type: ignore[assignment]
 
     app._on_task_complete("task:A:Migrate", 0)
@@ -337,7 +352,7 @@ def test_on_task_complete_fires_failed_balloon_on_nonzero(
             raise RuntimeError
 
     icon = _FakeIcon(icon=None)
-    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
     app._icon = icon  # type: ignore[assignment]
 
     app._on_task_complete("script:Git pull", 2)
@@ -352,12 +367,12 @@ def test_poll_tick_updates_icon_title_with_status(
         next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
     )
     icon = _FakeIcon(icon=icons.load("stopped"))
-    app = tray.TrayApp(cfg, orch, _StubProcessManager())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
     app._icon = icon
     state.save(state.State(active=state.ActiveProject(
         name="A", backend_pid=1, frontend_pid=2
     )))
-    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: True)
+    monkeypatch.setattr("foxtray.state.pid_alive", lambda pid, ctime: True)
     monkeypatch.setattr("foxtray.project.psutil.pid_exists", lambda pid: True)
 
     app._poll_tick()
@@ -394,7 +409,7 @@ def test_run_schedules_auto_start_when_configured(
 
     monkeypatch.setattr(pystray, "Icon", _StubIcon)
 
-    app = tray.TrayApp(cfg, _OrchStub(), _StubProcessManager())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, _OrchStub(), _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
     app.run()
 
     # The auto-start thread is a daemon; give it a moment to run
@@ -435,9 +450,9 @@ def test_run_skips_auto_start_when_active_project_exists(
         title = "FoxTray"
     monkeypatch.setattr(pystray, "Icon", _StubIcon)
     # Make clear_if_orphaned think the PIDs are alive so state is preserved
-    monkeypatch.setattr("foxtray.state.psutil.pid_exists", lambda pid: True)
+    monkeypatch.setattr("foxtray.state.pid_alive", lambda pid, ctime: True)
 
-    app = tray.TrayApp(cfg, _OrchStub(), _StubProcessManager())  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, _OrchStub(), _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
     app.run()
 
     import time
@@ -465,7 +480,7 @@ projects:
     cfg = config.Config(projects=[_project("A")])
     orch = _FakeOrchestrator(next_statuses={"A": _status()})
     icon = _FakeIcon(icon=icons.load("stopped"))
-    app = tray.TrayApp(cfg, orch, _StubProcessManager(), config_path=cfg_path)  # type: ignore[arg-type]
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), config_path=cfg_path, toast_manager=_StubToastManager())  # type: ignore[arg-type]
     app._icon = icon
 
     app._reload_config()

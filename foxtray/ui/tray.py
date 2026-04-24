@@ -17,10 +17,14 @@ from foxtray.process import ProcessManager
 from foxtray.project import Orchestrator, ProjectStatus
 from foxtray.ui import actions, icons
 from foxtray.ui.icons import IconState
+from foxtray.ui.toast import ToastManager
 
 log = logging.getLogger(__name__)
 
 _POLL_INTERVAL_S = 3.0
+# Separate cadence for the blocking http_ok probe — matches the poll cadence
+# by default, but decoupled so either can be tuned without affecting the other.
+_URL_REFRESH_INTERVAL_S = 3.0
 
 
 @dataclass(frozen=True)
@@ -374,6 +378,7 @@ class TrayApp:
         orchestrator: Orchestrator,
         process_manager: ProcessManager,
         config_path: Path | None = None,
+        toast_manager: ToastManager | None = None,
     ) -> None:
         self._cfg = cfg
         self._orchestrator = orchestrator
@@ -387,13 +392,25 @@ class TrayApp:
         self._prev_icon_state: IconState = "stopped"
         self._user_initiated_stop: set[str] = set()
         self._stop_event = threading.Event()
+        # Guards the (_cfg, _orchestrator, _prev_statuses) triple. Without
+        # it, _reload_config (pystray menu thread) can tear a _poll_tick
+        # in progress on the poller thread — the tick would observe the
+        # old cfg but the new orchestrator, or iterate a cfg that's about
+        # to be replaced mid-loop. RLock because _reload_config invokes
+        # refresh paths that may re-enter the same lock.
+        self._lock = threading.RLock()
         self._task_manager = tasks.TaskManager(
             kill_tree=process_manager.kill_tree,
             on_complete=self._on_task_complete,
         )
+        # Tests inject a stub to avoid spinning up a real Tk root (which
+        # would deadlock the test runner or crash via Tcl_AsyncDelete on
+        # cross-thread GC).
+        self._toast_manager = toast_manager if toast_manager is not None else ToastManager()
 
     def run(self) -> None:
         state_mod.clear_if_orphaned()
+        self._toast_manager.start()
         self._icon = pystray.Icon(
             name="FoxTray",
             icon=icons.load("stopped"),
@@ -402,12 +419,20 @@ class TrayApp:
         )
         poller = threading.Thread(target=self._poll_loop, name="foxtray-poller", daemon=True)
         poller.start()
+        url_refresher = threading.Thread(
+            target=self._url_refresh_loop,
+            name="foxtray-url-refresher",
+            daemon=True,
+        )
+        url_refresher.start()
         self._schedule_auto_start()
         try:
             self._icon.run()
         finally:
             self._stop_event.set()
             poller.join(timeout=_POLL_INTERVAL_S + 1.0)
+            url_refresher.join(timeout=_URL_REFRESH_INTERVAL_S + 1.0)
+            self._toast_manager.stop()
 
     def _schedule_auto_start(self) -> None:
         if self._cfg.auto_start is None:
@@ -438,6 +463,32 @@ class TrayApp:
             self._poll_tick()
             self._stop_event.wait(_POLL_INTERVAL_S)
 
+    def _url_refresh_loop(self) -> None:
+        """Background loop: blocking ``http_ok`` lives here, never on the poll
+        thread. Refreshes ``Orchestrator._url_ok`` for the currently active
+        project; ``status()`` reads the cache non-blockingly."""
+        while not self._stop_event.is_set():
+            try:
+                # Snapshot (active_name, orchestrator, project) under the lock
+                # so _reload_config can't replace the orchestrator between the
+                # lookup and the http call.
+                with self._lock:
+                    active = state_mod.load().active
+                    orchestrator = self._orchestrator
+                    project = (
+                        next(
+                            (p for p in self._cfg.projects if p.name == active.name),
+                            None,
+                        )
+                        if active is not None
+                        else None
+                    )
+                if project is not None:
+                    orchestrator.refresh_url_ok(project)
+            except Exception:  # noqa: BLE001 — background loop must never die
+                log.warning("url refresh tick failed", exc_info=True)
+            self._stop_event.wait(_URL_REFRESH_INTERVAL_S)
+
     def _poll_tick(self) -> None:
         if self._icon is None:
             return
@@ -446,37 +497,55 @@ class TrayApp:
         # raise. Any uncaught exception here would kill the daemon thread
         # silently, freezing the icon.
         try:
-            curr_active = state_mod.load().active
-            curr_statuses = {
-                p.name: self._orchestrator.status(p) for p in self._cfg.projects
-            }
+            # Hold the lock across the tick body so _reload_config can't tear
+            # the (_cfg, _orchestrator, _prev_statuses) triple mid-flight.
+            with self._lock:
+                curr_active = state_mod.load().active
+                curr_statuses = {
+                    p.name: self._orchestrator.status(p) for p in self._cfg.projects
+                }
 
-            # Atomic swap: any handler calling .add(name) on the old set before
-            # we reassign goes into `suppressed`; any add after the reassign
-            # goes into the fresh set and survives to the next tick.
-            suppressed = self._user_initiated_stop
-            self._user_initiated_stop = set()
+                # Atomic swap: any handler calling .add(name) on the old set before
+                # we reassign goes into `suppressed`; any add after the reassign
+                # goes into the fresh set and survives to the next tick.
+                suppressed = self._user_initiated_stop
+                self._user_initiated_stop = set()
 
-            for note in compute_transitions(
-                self._prev_active, self._prev_statuses,
-                curr_active, curr_statuses,
-                suppressed=suppressed,
-                pending_starts=self._orchestrator.pending_starts,
-            ):
+                transitions = compute_transitions(
+                    self._prev_active, self._prev_statuses,
+                    curr_active, curr_statuses,
+                    suppressed=suppressed,
+                    pending_starts=self._orchestrator.pending_starts,
+                )
+                new_icon_state = compute_icon_state(curr_active, curr_statuses)
+                tooltip = _tooltip_text(curr_active, curr_statuses)
+
+                # Snapshot the cfg project list so the notify step below
+                # (which may take a moment) doesn't hold the lock forever.
+                cfg_projects = tuple(self._cfg.projects)
+
+                self._prev_active = curr_active
+                self._prev_statuses = curr_statuses
+
+            # Notify / mutate icon OUTSIDE the lock — pystray calls can
+            # block briefly (Win32 shell), and we don't want _reload_config
+            # to wait on them.
+            for note in transitions:
                 if note.project_name is not None:
-                    project = next((p for p in self._cfg.projects if p.name == note.project_name), None)
+                    project = next(
+                        (p for p in cfg_projects if p.name == note.project_name),
+                        None,
+                    )
                     if project is not None:
-                        actions.notify_project_up(project, self._icon)
+                        actions.notify_project_up(
+                            project, self._icon, show_toast=self._toast_manager.show,
+                        )
                         continue
                 self._icon.notify(note.message, title=note.title)
 
-            new_icon_state = compute_icon_state(curr_active, curr_statuses)
             if new_icon_state != self._prev_icon_state:
                 self._icon.icon = icons.load(new_icon_state)
                 self._prev_icon_state = new_icon_state
-
-            self._prev_active = curr_active
-            self._prev_statuses = curr_statuses
 
             # Orphan reconciliation — runs AFTER transition computation so that the
             # "stopped unexpectedly" balloon still fires for the dying tick.
@@ -485,10 +554,11 @@ class TrayApp:
                     "poll tick cleared orphaned state for %s",
                     curr_active.name if curr_active else "?",
                 )
-                self._prev_active = None
+                with self._lock:
+                    self._prev_active = None
 
             try:
-                self._icon.title = _tooltip_text(curr_active, curr_statuses)
+                self._icon.title = tooltip
             except Exception:  # noqa: BLE001
                 log.warning("tooltip update failed", exc_info=True)
         except Exception:  # noqa: BLE001 — poll loop must never die
@@ -520,16 +590,21 @@ class TrayApp:
         # through to a disabled "FoxTray error" placeholder item; the next
         # menu open re-runs this method and recovers automatically.
         try:
+            # Snapshot under lock so a concurrent reload cannot swap
+            # (cfg, orchestrator) mid-iteration.
+            with self._lock:
+                cfg = self._cfg
+                orchestrator = self._orchestrator
             active = state_mod.load().active
             statuses = {
-                p.name: self._orchestrator.status(p) for p in self._cfg.projects
+                p.name: orchestrator.status(p) for p in cfg.projects
             }
         except Exception:  # noqa: BLE001
             log.warning("menu build failed", exc_info=True)
             return (pystray.MenuItem("FoxTray error", None, enabled=False),)
         handlers = self._handlers()
         specs = build_menu_items(
-            self._cfg, active, statuses, handlers,
+            cfg, active, statuses, handlers,
             running_tasks=self._task_manager.running_keys(),
         )
         return tuple(_spec_to_pystray(s) for s in specs)
@@ -537,20 +612,26 @@ class TrayApp:
     def _reload_config(self) -> None:
         if self._config_path is None:
             raise RuntimeError("No config path available")
+        # Load the new YAML BEFORE taking the lock: if it raises ConfigError,
+        # the tick thread is not blocked during the user's editor save.
         new_cfg = config_mod.load(self._config_path)
-        pending = set(self._orchestrator.pending_starts)
-        self._cfg = new_cfg
-        self._orchestrator = Orchestrator(
+        new_orchestrator = Orchestrator(
             manager=self._process_manager,
             cfg=new_cfg,
         )
-        self._orchestrator.pending_starts.update(
-            name for name in pending if any(p.name == name for p in new_cfg.projects)
-        )
-        self._prev_statuses = {
-            p.name: self._prev_statuses.get(p.name, _zero_status(p.name))
-            for p in new_cfg.projects
-        }
+        # Swap the triple atomically so a concurrent _poll_tick either sees
+        # the full old state or the full new state — never a mix.
+        with self._lock:
+            new_orchestrator.pending_starts.update(
+                name for name in self._orchestrator.pending_starts
+                if any(p.name == name for p in new_cfg.projects)
+            )
+            self._cfg = new_cfg
+            self._orchestrator = new_orchestrator
+            self._prev_statuses = {
+                p.name: self._prev_statuses.get(p.name, _zero_status(p.name))
+                for p in new_cfg.projects
+            }
         if self._icon is not None:
             self._icon.update_menu()
 

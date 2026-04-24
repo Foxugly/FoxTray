@@ -84,27 +84,31 @@ def test_on_start_calls_orchestrator() -> None:
     assert icon.notifications == []
 
 
-def test_notify_project_up_uses_clickable_toast(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_notify_project_up_uses_show_toast_when_provided() -> None:
     recorded: list[tuple[str, str, str]] = []
-    monkeypatch.setattr(
-        actions,
-        "_show_clickable_toast",
-        lambda title, message, url: recorded.append((title, message, url)),
-    )
+
+    def _show_toast(title: str, message: str, url: str) -> None:
+        recorded.append((title, message, url))
+
     icon = _FakeIcon()
-    actions.notify_project_up(_project(), icon)
+    actions.notify_project_up(_project(), icon, show_toast=_show_toast)
     assert recorded == [("FoxTray", "Demo is up", "http://localhost:4200")]
     assert icon.notifications == []
 
 
-def test_notify_project_up_falls_back_to_icon_notify_on_toast_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_notify_project_up_falls_back_to_icon_notify_on_toast_error() -> None:
     def _boom(title: str, message: str, url: str) -> None:
         raise RuntimeError("toast failed")
-    monkeypatch.setattr(actions, "_show_clickable_toast", _boom)
+
     icon = _FakeIcon()
-    actions.notify_project_up(_project(), icon)
+    actions.notify_project_up(_project(), icon, show_toast=_boom)
+    assert icon.notifications == [("FoxTray", "Demo is up\nhttp://localhost:4200")]
+
+
+def test_notify_project_up_falls_back_when_show_toast_is_none() -> None:
+    """Without a ToastManager, the fallback balloon still informs the user."""
+    icon = _FakeIcon()
+    actions.notify_project_up(_project(), icon, show_toast=None)
     assert icon.notifications == [("FoxTray", "Demo is up\nhttp://localhost:4200")]
 
 

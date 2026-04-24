@@ -6,10 +6,9 @@ import os
 import subprocess
 import sys
 import threading
-import tkinter as tk
 import webbrowser
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Callable, Protocol, Sequence
 
 from foxtray import __version__, config, tasks
 from foxtray.project import Orchestrator
@@ -46,84 +45,26 @@ def _notify_error(icon: Notifier, exc: Exception) -> None:
     icon.notify(str(exc), title="FoxTray error")
 
 
-def _show_clickable_toast(title: str, message: str, url: str) -> None:
-    def _run() -> None:
-        root = tk.Tk()
-        root.withdraw()
-
-        toast = tk.Toplevel(root)
-        toast.overrideredirect(True)
-        toast.attributes("-topmost", True)
-        toast.configure(bg="#202124")
-
-        width = 380
-        height = 120
-        screen_width = toast.winfo_screenwidth()
-        screen_height = toast.winfo_screenheight()
-        x = screen_width - width - 24
-        y = screen_height - height - 64
-        toast.geometry(f"{width}x{height}+{x}+{y}")
-
-        frame = tk.Frame(toast, bg="#202124", padx=14, pady=12)
-        frame.pack(fill="both", expand=True)
-
-        tk.Label(
-            frame,
-            text=title,
-            bg="#202124",
-            fg="#ffffff",
-            anchor="w",
-            font=("Segoe UI Semibold", 11),
-        ).pack(fill="x")
-        tk.Label(
-            frame,
-            text=message,
-            bg="#202124",
-            fg="#d7dadc",
-            anchor="w",
-            justify="left",
-            font=("Segoe UI", 10),
-        ).pack(fill="x", pady=(6, 4))
-
-        link = tk.Label(
-            frame,
-            text=url,
-            bg="#202124",
-            fg="#7cc7ff",
-            anchor="w",
-            justify="left",
-            cursor="hand2",
-            font=("Segoe UI", 10, "underline"),
-        )
-        link.pack(fill="x")
-
-        def _open_and_close(_event: object | None = None) -> None:
-            _open_url(url)
-            _close()
-
-        def _close() -> None:
-            try:
-                toast.destroy()
-            finally:
-                root.quit()
-                root.destroy()
-
-        link.bind("<Button-1>", _open_and_close)
-        toast.bind("<Button-1>", _open_and_close)
-        toast.after(8000, _close)
-        toast.deiconify()
-        root.mainloop()
-
-    threading.Thread(target=_run, name="foxtray-toast", daemon=True).start()
+ShowToastCallable = Callable[[str, str, str], None]
 
 
-def notify_project_up(project: config.Project, icon: Notifier) -> None:
+def notify_project_up(
+    project: config.Project,
+    icon: Notifier,
+    show_toast: ShowToastCallable | None = None,
+) -> None:
+    """Display a clickable "X is up" toast. Falls back to icon.notify if the
+    toast callable is None or raises — the notification must always fire.
+    ``show_toast`` is ``ToastManager.show`` in production; tests can pass a
+    fake or leave it ``None`` to exercise the balloon fallback path."""
     message = f"{project.name} is up"
-    try:
-        _show_clickable_toast("FoxTray", message, project.url)
-    except Exception:  # noqa: BLE001
-        log.warning("clickable project toast failed", exc_info=True)
-        icon.notify(f"{message}\n{project.url}", title="FoxTray")
+    if show_toast is not None:
+        try:
+            show_toast("FoxTray", message, project.url)
+            return
+        except Exception:  # noqa: BLE001
+            log.warning("clickable project toast failed", exc_info=True)
+    icon.notify(f"{message}\n{project.url}", title="FoxTray")
 
 
 def on_start(orchestrator: Orchestrator, project: config.Project, icon: Notifier) -> None:
