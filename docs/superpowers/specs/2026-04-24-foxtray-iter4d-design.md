@@ -1,118 +1,242 @@
-# FoxTray Iter 4d — Launch-on-Boot + Global Keyboard Shortcut Design (Skeleton)
+# FoxTray Iter 4d — Launch-on-Boot Design (reduced scope)
 
-> **Status:** design outline only. No implementation plan yet — the two features are related by "OS integration" but can also be split into 4d-boot and 4d-shortcut if they diverge during brainstorming.
+> **Status:** Reduced from the skeleton's original "launch-on-boot + hotkey" scope to launch-on-boot only. The global-hotkey feature is **deferred** because pystray exposes no public API to open its context menu programmatically, leaving the hotkey with no natural "open menu" semantics. If you later want a hotkey action (e.g., "toggle active project", "show status balloon", "open About"), reopen that spec.
 
 ## Goal
 
-Two Windows-integration features:
-
-1. **Launch-on-Windows-boot** — a menu entry (toggle) that registers / unregisters FoxTray for automatic start when the user signs into Windows.
-2. **Global keyboard shortcut** — a user-configurable hotkey (e.g., `Ctrl+Shift+F`) that opens the tray menu from anywhere, without requiring the mouse to reach the notification area.
+Menu entry that toggles whether FoxTray auto-starts when the user signs into Windows.
 
 ## Non-goals (for Iter 4d)
 
-- Multiple hotkeys (multi-action bindings). Single chord opens the menu — that's it.
-- Hotkey for individual tasks / scripts (would require a richer binding config).
-- Launch at Windows boot time (before user login) — Iter 4d targets user-login autostart only. Boot-time would require a service / scheduled task with SYSTEM privileges.
-- Per-project autostart — the menu entry is global "start tray on login", not "auto-start FoxRunner when tray launches".
+- Global keyboard shortcut — deferred.
+- Boot-time autostart before login (requires SYSTEM service — not in scope).
+- Per-project autostart (Iter 5b already covers `auto_start:` in config for "which project to start when the tray launches").
 
 ## Architecture overview
 
-### Launch-on-boot
+Windows offers two simple per-user autostart mechanisms:
 
-Two common mechanisms on Windows:
+- **`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry key** — each named value is an executable to launch on login. Simplest, reversible with one deletion. Stdlib `winreg`.
+- **Startup folder** `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` — drop a `.lnk` shortcut. Requires COM to make shortcuts, more code.
 
-- **Registry key** `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` — each named value is an executable path that starts on login. Simplest. Per-user. Reversible with a single deletion.
-- **Startup folder** `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` — drop a `.lnk` shortcut. Works but requires COM to create shortcuts; slightly more code.
+**Decision: registry.** One module (`foxtray/autostart.py`) wrapping `winreg` for `is_enabled()`, `enable(exe_path)`, `disable()`. No new deps.
 
-**Pick the registry approach.** Uses `winreg` stdlib, no deps.
+### Frozen-only
+
+Autostart is only meaningful for the packaged `.exe`. When running from dev Python, the menu entry still appears but the "Start at login" value writes `python.exe main.py tray` — which would trigger a console window flash on login. That's ugly. **Gate the menu entry: only enabled when `sys.frozen` is True.**
+
+### Menu integration
+
+New menu entry `Start at login` placed before `About`. Checkable:
+- `checked=lambda _: autostart.is_enabled()` reads the registry each time the menu is painted.
+- Click toggles: if enabled → `disable()`; else → `enable(Path(sys.executable))`.
+
+pystray's `MenuItem` supports `checked=callable` (returns bool).
+
+## File structure
+
+New:
+- `foxtray/autostart.py` — `is_enabled()`, `enable(exe_path)`, `disable()`.
+- `tests/test_autostart.py` — monkeypatched `winreg`.
+- `docs/manual-tests/iter4d.md`.
+
+Modified:
+- `foxtray/ui/tray.py` — `Handlers.on_toggle_autostart`, menu entry, wiring.
+- `foxtray/ui/actions.py` — `on_toggle_autostart`.
+- `tests/test_tray_actions.py` — handler tests.
+- `tests/test_tray.py` — menu entry presence + update handlers helper.
+
+## Components
+
+### `foxtray/autostart.py`
 
 ```python
-# foxtray/autostart.py
-import winreg
+"""Windows registry Run key for per-user autostart."""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _VALUE_NAME = "FoxTray"
 
-def is_enabled() -> bool: ...
+
+def is_enabled() -> bool:
+    """True if HKCU\\...\\Run\\FoxTray is set."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
+            winreg.QueryValueEx(key, _VALUE_NAME)
+            return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        log.warning("autostart.is_enabled: OSError reading registry", exc_info=True)
+        return False
+
+
 def enable(exe_path: Path) -> None:
-    # Write HKCU\...\Run\FoxTray = f'"{exe_path}" tray'
-    ...
+    """Register exe_path + ' tray' in the HKCU Run key under name 'FoxTray'."""
+    import winreg
+    value = f'"{exe_path}" tray'
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
+        winreg.SetValueEx(key, _VALUE_NAME, 0, winreg.REG_SZ, value)
+
+
 def disable() -> None:
-    # Delete HKCU\...\Run\FoxTray (ignore if missing)
-    ...
+    """Remove HKCU\\...\\Run\\FoxTray. Best-effort — never raises on absent value."""
+    import winreg
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_SET_VALUE
+        ) as key:
+            winreg.DeleteValue(key, _VALUE_NAME)
+    except FileNotFoundError:
+        return
+    except OSError:
+        log.warning("autostart.disable: OSError modifying registry", exc_info=True)
 ```
 
-The `exe_path` in bundled mode is `sys.executable` (the FoxTray.exe from Iter 4c). In dev mode it's `python.exe` — we probably don't want dev autostart, so the feature is gated on `sys.frozen`.
+### `foxtray/ui/actions.py`
 
-### Global keyboard shortcut
+```python
+import sys
 
-Registering a global hotkey on Windows from Python has a few options:
 
-- **`keyboard` package (third-party)** — simple API (`keyboard.add_hotkey("ctrl+shift+f", callback)`) but requires admin on some setups, polls input globally, and is a privacy/security footprint we should think about.
-- **`pynput` package (third-party)** — similar tradeoffs.
-- **`RegisterHotKey` via `ctypes`** — native Windows API, no deps, no admin required, but the window-thread message loop gets messy to reconcile with pystray's event loop.
-
-The cleanest Python-stdlib-only path is **`ctypes` + a dedicated message-loop thread**:
-1. Start a daemon thread with its own thread-level `RegisterHotKey` (`MOD_CONTROL | MOD_SHIFT`, vk for F).
-2. Pump messages with `GetMessage` / `TranslateMessage` / `DispatchMessage` inside that thread.
-3. On `WM_HOTKEY`, call `icon.visible = True` to pop the menu (actually pystray needs `icon.notify` or a custom action — TBD, needs a pystray-specific trick to "open the menu programmatically").
-
-Open question: pystray does not have a public API to open the context menu from code. Possible fallbacks:
-- Fire a notification balloon telling the user "Menu hotkey registered, click the icon".
-- Call `Shell_NotifyIconW` directly to send a mouse-click event to the icon. Hacky.
-- Accept that the hotkey shows a simplified balloon / quick menu via `tkinter` instead of pystray's menu.
-
-**This needs brainstorming.** Possibly simpler: the hotkey triggers an action directly (e.g., cycle next project, or show a balloon with status) instead of opening the menu.
-
-### Hotkey config
-
-In `config.yaml`:
-```yaml
-hotkey:
-  modifiers: ctrl+shift
-  key: F
-  action: open_menu  # or "cycle_project", "status_balloon", ...
+def on_toggle_autostart(icon: Notifier) -> None:
+    from foxtray import autostart
+    if not getattr(sys, "frozen", False):
+        icon.notify(
+            "Autostart only works for the packaged .exe (dev mode skipped)",
+            title="FoxTray",
+        )
+        return
+    try:
+        if autostart.is_enabled():
+            autostart.disable()
+            icon.notify("Autostart disabled", title="FoxTray")
+        else:
+            autostart.enable(Path(sys.executable))
+            icon.notify("Autostart enabled", title="FoxTray")
+    except Exception as exc:  # noqa: BLE001
+        _notify_error(icon, exc)
 ```
 
-Optional — if omitted, no hotkey registered.
+### `foxtray/ui/tray.py`
 
-Validation: parse modifiers (`ctrl` / `shift` / `alt` / `win`), map `key` to vk code via a lookup table.
+`Handlers` gains:
+```python
+on_toggle_autostart: Callable[[], None]
+```
 
-### Menu wiring
+`build_menu_items` adds a new entry BEFORE `About` (at the very end, between the final separator and "About"):
+```python
+items.append(MenuItemSpec(
+    text="Start at login",
+    action=handlers.on_toggle_autostart,
+    # NOTE: pystray supports `checked=...` but our MenuItemSpec dataclass
+    # does not yet have it. Adding it is Iter 4d's small dataclass tweak.
+))
+```
 
-New menu entry: `Autostart` (checkable toggle):
-- If enabled: `Autostart ✓` (or just "Autostart on login" with `checked=True`).
-- Click: toggle via `autostart.enable(sys.executable)` / `autostart.disable()`.
+**New `MenuItemSpec.checked` field** (optional):
+```python
+@dataclass(frozen=True)
+class MenuItemSpec:
+    text: str
+    action: Callable[[], None] | None = None
+    enabled: bool = True
+    submenu: tuple["MenuItemSpec", ...] = field(default_factory=tuple)
+    separator: bool = False
+    checked: Callable[[], bool] | None = None  # NEW: returns True → menu shows ✓
+```
 
-pystray supports `MenuItem(checked=lambda item: autostart.is_enabled())`. Use it.
+`_spec_to_pystray` honors `checked`:
+```python
+if spec.checked is not None:
+    return pystray.MenuItem(
+        spec.text,
+        lambda _icon, _item: action(),
+        enabled=spec.enabled,
+        checked=lambda _item: spec.checked(),
+    )
+```
 
-No menu entry for the hotkey itself (it's YAML-configured).
+(Keep the existing non-checked branch as-is for all other entries.)
 
-## Open questions (to resolve in brainstorming)
+The `Start at login` entry gets `checked=lambda: autostart.is_enabled()`:
+```python
+from foxtray import autostart
 
-1. **Which hotkey mechanism?** Stdlib `RegisterHotKey` + message loop (preferred) vs `keyboard`/`pynput` package.
-2. **What does the hotkey DO?** Opening pystray's context menu programmatically is nontrivial — is a simpler action (status balloon / cycle active project) acceptable?
-3. **Autostart only for bundled .exe, or also for dev Python?** Lean: bundled only. Dev users run the tray manually.
-4. **Autostart command line:** `"FoxTray.exe" tray` — should we add a `--silent` flag to suppress all stderr on startup, or is stderr-to-void acceptable from the registry invocation?
-5. **Interaction with Iter 4b single-instance lock**: if autostart launches the tray, and the user also clicks a shortcut to launch it a second time, the second one exits cleanly — existing behavior, no issue. Verify.
-6. **Hotkey config hot-reload?** Probably no — set once at `tray` startup from `config.yaml`, reboot tray to change. Acceptable.
+items.append(MenuItemSpec(
+    text="Start at login",
+    action=handlers.on_toggle_autostart,
+    checked=lambda: autostart.is_enabled(),
+))
+```
 
-## File structure (anticipated)
+`TrayApp._handlers` wires:
+```python
+on_toggle_autostart=lambda: actions.on_toggle_autostart(icon),
+```
 
-New files:
-- `foxtray/autostart.py` — winreg Run key management.
-- `foxtray/hotkey.py` — RegisterHotKey + message loop thread (or wrapper around a third-party).
-- `tests/test_autostart.py` — monkeypatched winreg.
-- `tests/test_hotkey.py` — unit tests for config parsing; the message loop is hard to unit-test.
-- `docs/manual-tests/iter4d.md`.
+## Testing
 
-Modified files:
-- `foxtray/config.py` — optional top-level `hotkey:` block with a `HotkeyConfig` dataclass.
-- `foxtray/ui/tray.py` — `Handlers.on_toggle_autostart`; `build_menu_items` adds the `Autostart` checkable entry; `TrayApp.__init__` starts the hotkey thread if configured.
-- `foxtray/ui/actions.py` — `on_toggle_autostart`.
-- `foxtray/cli.py` — no change expected; `cmd_tray` passes the hotkey config to `TrayApp`.
+- `test_autostart.py`:
+  - `test_is_enabled_false_when_value_missing` — monkeypatch `winreg.OpenKey` raises `FileNotFoundError` OR returns a key whose `QueryValueEx` raises.
+  - `test_is_enabled_true_when_value_present` — monkeypatch returns a mock key with valid `QueryValueEx`.
+  - `test_enable_writes_value` — monkeypatch `winreg.CreateKey` and `winreg.SetValueEx` to record args; call `enable(Path("C:\\x\\FoxTray.exe"))`; assert `SetValueEx(..., _VALUE_NAME, 0, REG_SZ, '"C:\\x\\FoxTray.exe" tray')`.
+  - `test_disable_deletes_value` — similar.
+  - `test_disable_noop_when_missing` — monkeypatch `OpenKey` raises `FileNotFoundError`; `disable()` returns silently.
 
-## Next step
+Mocking `winreg` is nontrivial (Windows-only module, module-level constants). Use `unittest.mock.MagicMock` + `monkeypatch.setattr("foxtray.autostart.winreg", mock)`.
 
-Brainstorming session to answer open questions, especially (1) hotkey mechanism and (2) hotkey action semantics. Then plan.
+Actually, since `winreg` is imported inside the functions (`import winreg`), we need a different strategy. Let me adjust: **import `winreg` at module top** to make monkeypatching trivial, and guard it with a Windows check:
+
+```python
+# top of foxtray/autostart.py
+import winreg  # stdlib on Windows
+```
+
+And the tests monkeypatch `foxtray.autostart.winreg` with a mock.
+
+- `test_tray.py`: `test_menu_has_start_at_login_entry` — verify an entry named "Start at login" exists between separator and About.
+- `test_tray.py`: update `_noop_handlers()` / `_noop_handlers_with_tasks()` to include `on_toggle_autostart=lambda: None`.
+- `test_tray_actions.py`:
+  - `test_on_toggle_autostart_enables_when_currently_disabled` — monkeypatch `autostart.is_enabled` → False, `autostart.enable` records.
+  - `test_on_toggle_autostart_disables_when_currently_enabled`.
+  - `test_on_toggle_autostart_notifies_when_not_frozen` — monkeypatch `sys.frozen` absent → balloon "Autostart only works for the packaged .exe".
+
+## Manual smoke
+
+```markdown
+# FoxTray Iter 4d — Manual Test Log
+
+Prerequisite: Iter 4c passed (you have a built FoxTray.exe).
+
+## Start at login (bundled .exe only)
+
+- [ ] Launch `dist\FoxTray.exe`. Right-click → Start at login. Balloon "Autostart enabled".
+- [ ] `reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Run` — has a `FoxTray` value pointing to the .exe path.
+- [ ] Right-click → Start at login. Balloon "Autostart disabled". Registry value removed.
+- [ ] Sign out + sign in. If autostart was enabled before sign-out, tray is visible after login.
+
+## Dev mode behavior
+
+- [ ] `./.venv/Scripts/python.exe main.py tray` (not the .exe). Right-click → Start at login. Balloon "Autostart only works for the packaged .exe (dev mode skipped)". Registry NOT modified.
+
+## Known limitations
+- Per-user only (HKCU). A different Windows user needs their own toggle.
+- If FoxTray.exe moves, registry entry points to the old location. User must re-enable from the new location.
+
+## Observed issues
+_None yet._
+```
+
+## Self-review
+
+- Decisions made: registry-based (vs startup folder), frozen-only (dev mode balloons a skip message), `checked=` via new `MenuItemSpec.checked` field.
+- Placeholder scan: clean.
+- Deferred cleanly: hotkey feature moved out of this iteration with documented reason.
