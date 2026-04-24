@@ -384,3 +384,26 @@ def test_on_copy_url_notifies_on_failure(monkeypatch: pytest.MonkeyPatch) -> Non
     icon = _FakeIcon()
     actions.on_copy_url("http://x", icon)
     assert icon.notifications == [("FoxTray error", "clip died")]
+
+
+def test_on_open_log_opens_existing_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_path = tmp_path / "some.log"
+    log_path.write_text("content\n", encoding="utf-8")
+    captured: list[Path] = []
+    monkeypatch.setattr(actions, "_open_folder_native", captured.append)
+    icon = _FakeIcon()
+    actions.on_open_log(log_path, icon)
+    assert captured == [log_path]
+    assert icon.notifications == []
+
+
+def test_on_open_log_notifies_when_file_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_path = tmp_path / "missing.log"
+    monkeypatch.setattr(actions, "_open_folder_native", lambda p: None)
+    icon = _FakeIcon()
+    actions.on_open_log(log_path, icon)
+    assert any("No log yet" in message for _title, message in icon.notifications)

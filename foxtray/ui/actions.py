@@ -224,3 +224,13 @@ def on_copy_url(url: str, icon: Notifier) -> None:
         icon.notify(f"URL copied: {url}", title="FoxTray")
     except Exception as exc:  # noqa: BLE001
         _notify_error(icon, exc)
+
+
+def on_open_log(log_path: Path, icon: Notifier) -> None:
+    try:
+        if not log_path.exists():
+            icon.notify(f"No log yet: {log_path.name}", title="FoxTray")
+            return
+        _open_folder_native(log_path)
+    except Exception as exc:  # noqa: BLE001
+        _notify_error(icon, exc)

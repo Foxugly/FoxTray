@@ -56,6 +56,7 @@ class Handlers:
     on_restart: Callable[[config_mod.Project], None]
     on_open_logs_folder: Callable[[], None]
     on_copy_url: Callable[[str], None]
+    on_open_log: Callable[[Path], None]
 
 
 def _status_to_icon_state(status: ProjectStatus) -> IconState:
@@ -202,6 +203,14 @@ def _project_submenu(
         MenuItemSpec(
             text="Open frontend folder",
             action=lambda path=project.frontend.path: handlers.on_open_folder(path),
+        ),
+        MenuItemSpec(
+            text="Open backend log",
+            action=lambda p=paths.log_file(project.name, "backend"): handlers.on_open_log(p),
+        ),
+        MenuItemSpec(
+            text="Open frontend log",
+            action=lambda p=paths.log_file(project.name, "frontend"): handlers.on_open_log(p),
         ),
     ]
     if not is_stopped:
@@ -523,6 +532,7 @@ class TrayApp:
             on_restart=lambda p: actions.on_restart(orch, p, icon, self._user_initiated_stop),
             on_open_logs_folder=lambda: actions.on_open_logs_folder(icon),
             on_copy_url=lambda url: actions.on_copy_url(url, icon),
+            on_open_log=lambda path: actions.on_open_log(path, icon),
         )
 
 

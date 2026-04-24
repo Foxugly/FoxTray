@@ -178,6 +178,7 @@ def _noop_handlers() -> tray.Handlers:
         on_restart=lambda p: None,
         on_open_logs_folder=lambda: None,
         on_copy_url=lambda u: None,
+        on_open_log=lambda path: None,
     )
 
 
@@ -418,6 +419,7 @@ def _noop_handlers_with_tasks() -> tray.Handlers:
         on_restart=lambda p: None,
         on_open_logs_folder=lambda: None,
         on_copy_url=lambda u: None,
+        on_open_log=lambda path: None,
     )
 
 
@@ -592,3 +594,14 @@ def test_menu_root_has_open_logs_folder_entry() -> None:
     )
     root_texts = [i.text for i in items if not i.separator and not i.submenu]
     assert "Open logs folder" in root_texts
+
+
+def test_menu_project_has_open_backend_log_entry() -> None:
+    cfg = config.Config(projects=[_project("A")])
+    items = tray.build_menu_items(
+        cfg, None, {"A": _status()}, _noop_handlers(),
+        running_tasks=set(),
+    )
+    submenu_texts = [s.text for s in items[0].submenu]
+    assert "Open backend log" in submenu_texts
+    assert "Open frontend log" in submenu_texts
