@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
+import threading
 import webbrowser
 from pathlib import Path
 from typing import Protocol, Sequence
@@ -179,4 +181,46 @@ def on_about(icon: Notifier) -> None:
     try:
         _show_about_dialog(_ABOUT_TITLE, _ABOUT_BODY)
     except Exception as exc:  # noqa: BLE001 — MessageBoxW failure must not crash tray
+        _notify_error(icon, exc)
+
+
+def on_restart(
+    orchestrator: Orchestrator,
+    project: config.Project,
+    icon: Notifier,
+    user_initiated: set[str],
+) -> None:
+    """Stop then start in a background thread. The menu-callback thread
+    returns immediately so pystray stays responsive during the kill/wait."""
+    def _run() -> None:
+        user_initiated.add(project.name)
+        try:
+            orchestrator.stop(project.name)
+            orchestrator.start(project)
+        except Exception as exc:  # noqa: BLE001
+            _notify_error(icon, exc)
+    threading.Thread(target=_run, name=f"restart-{project.name}", daemon=True).start()
+
+
+def on_open_logs_folder(icon: Notifier) -> None:
+    from foxtray import paths
+    try:
+        _open_folder_native(paths.logs_dir())
+    except Exception as exc:  # noqa: BLE001
+        _notify_error(icon, exc)
+
+
+def _copy_to_clipboard_windows(text: str) -> None:
+    """Copy text to Windows clipboard via built-in clip.exe."""
+    subprocess.run(
+        ["clip"], input=text, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def on_copy_url(url: str, icon: Notifier) -> None:
+    try:
+        _copy_to_clipboard_windows(url)
+        icon.notify(f"URL copied: {url}", title="FoxTray")
+    except Exception as exc:  # noqa: BLE001
         _notify_error(icon, exc)

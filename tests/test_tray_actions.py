@@ -327,3 +327,60 @@ def test_on_about_notifies_on_dialog_exception(
     icon = _FakeIcon()
     actions.on_about(icon)
     assert icon.notifications == [("FoxTray error", "boom")]
+
+
+def test_on_restart_calls_stop_then_start_in_background_thread() -> None:
+    orch = _FakeOrchestrator()
+    icon = _FakeIcon()
+    user_initiated: set[str] = set()
+    actions.on_restart(orch, _project(), icon, user_initiated)
+    # Wait for the background thread to finish (up to 1s)
+    import time
+    deadline = time.monotonic() + 1.0
+    while (orch.started == [] or orch.stopped == []) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert orch.stopped == ["Demo"]
+    assert orch.started == ["Demo"]
+    assert user_initiated == {"Demo"}
+
+
+def test_on_restart_notifies_on_exception_in_thread() -> None:
+    orch = _FakeOrchestrator(raises=RuntimeError("boom"))
+    icon = _FakeIcon()
+    actions.on_restart(orch, _project(), icon, set())
+    import time
+    deadline = time.monotonic() + 1.0
+    while not icon.notifications and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert any("boom" in message for _title, message in icon.notifications)
+
+
+def test_on_open_logs_folder_calls_open_folder_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from foxtray import paths
+    captured: list[Path] = []
+    monkeypatch.setattr(actions, "_open_folder_native", captured.append)
+    actions.on_open_logs_folder(_FakeIcon())
+    assert captured == [paths.logs_dir()]
+
+
+def test_on_copy_url_copies_and_fires_balloon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[str] = []
+    monkeypatch.setattr(actions, "_copy_to_clipboard_windows", recorded.append)
+    icon = _FakeIcon()
+    actions.on_copy_url("http://localhost:4200", icon)
+    assert recorded == ["http://localhost:4200"]
+    assert any("URL copied" in message and "4200" in message
+               for _title, message in icon.notifications)
+
+
+def test_on_copy_url_notifies_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(text: str) -> None:
+        raise RuntimeError("clip died")
+    monkeypatch.setattr(actions, "_copy_to_clipboard_windows", _boom)
+    icon = _FakeIcon()
+    actions.on_copy_url("http://x", icon)
+    assert icon.notifications == [("FoxTray error", "clip died")]
