@@ -184,3 +184,60 @@ def test_cmd_start_maps_port_in_use_to_exit_2(
     err = capsys.readouterr().err
     assert rc == 2
     assert "8000" in err
+
+
+def test_cmd_tray_acquires_and_releases_lock(
+    demo_config: Path, tmp_appdata: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+    from foxtray import singleton
+    monkeypatch.setattr(singleton, "acquire_lock", lambda: calls.append("acquire"))
+    monkeypatch.setattr(singleton, "release_lock", lambda: calls.append("release"))
+
+    class _FakeTray:
+        def __init__(self, cfg, orch, pm) -> None: ...
+        def run(self) -> None: calls.append("run")
+
+    from foxtray.ui import tray as tray_mod
+    monkeypatch.setattr(tray_mod, "TrayApp", _FakeTray)
+
+    rc = cli.main(["--config", str(demo_config), "tray"])
+    assert rc == 0
+    assert calls == ["acquire", "run", "release"]
+
+
+def test_cmd_tray_exits_1_when_lock_held(
+    demo_config: Path, tmp_appdata: Path,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+) -> None:
+    from foxtray import singleton
+    def _raise() -> None:
+        raise singleton.LockHeldError("FoxTray tray is already running (pid 123)")
+    monkeypatch.setattr(singleton, "acquire_lock", _raise)
+
+    rc = cli.main(["--config", str(demo_config), "tray"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "already running" in err
+    assert "123" in err
+
+
+def test_cmd_tray_releases_lock_even_when_trayapp_raises(
+    demo_config: Path, tmp_appdata: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    released: list[bool] = []
+    from foxtray import singleton
+    monkeypatch.setattr(singleton, "acquire_lock", lambda: None)
+    monkeypatch.setattr(singleton, "release_lock", lambda: released.append(True))
+
+    class _BoomTray:
+        def __init__(self, cfg, orch, pm) -> None: ...
+        def run(self) -> None:
+            raise RuntimeError("mid-run crash")
+
+    from foxtray.ui import tray as tray_mod
+    monkeypatch.setattr(tray_mod, "TrayApp", _BoomTray)
+
+    with pytest.raises(RuntimeError, match="mid-run crash"):
+        cli.main(["--config", str(demo_config), "tray"])
+    assert released == [True]

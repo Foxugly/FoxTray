@@ -6,7 +6,7 @@ import logging
 import sys
 from pathlib import Path
 
-from foxtray import config, process, project, state
+from foxtray import config, process, project, singleton, state
 from foxtray.ui import tray as tray_module
 
 log = logging.getLogger(__name__)
@@ -80,9 +80,17 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_tray(args: argparse.Namespace) -> int:
     cfg = config.load(args.config)
-    manager = process.ProcessManager()
-    orchestrator = project.Orchestrator(manager=manager, cfg=cfg)
-    tray_module.TrayApp(cfg, orchestrator, manager).run()
+    try:
+        singleton.acquire_lock()
+    except singleton.LockHeldError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 1
+    try:
+        manager = process.ProcessManager()
+        orchestrator = project.Orchestrator(manager=manager, cfg=cfg)
+        tray_module.TrayApp(cfg, orchestrator, manager).run()
+    finally:
+        singleton.release_lock()
     return 0
 
 
