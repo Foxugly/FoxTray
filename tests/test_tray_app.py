@@ -382,6 +382,85 @@ def test_poll_tick_updates_icon_title_with_status(
     assert "A" in icon.title
 
 
+def test_request_refresh_sets_wake_event(tmp_appdata: Path) -> None:
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(next_statuses={"A": _status()})
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
+    assert not app._wake_event.is_set()
+    app.request_refresh()
+    assert app._wake_event.is_set()
+
+
+def test_stop_handler_wakes_poller_for_immediate_refresh(tmp_appdata: Path) -> None:
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(next_statuses={"A": _status()})
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
+    app._icon = _FakeIcon(icon=icons.load("running"))
+    app._handlers().on_stop(_project("A"))
+    assert app._wake_event.is_set()
+
+
+def test_start_handler_wakes_poller_for_immediate_refresh(tmp_appdata: Path) -> None:
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(next_statuses={"A": _status()})
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
+    app._icon = _FakeIcon(icon=icons.load("stopped"))
+    app._handlers().on_start(_project("A"))
+    assert app._wake_event.is_set()
+
+
+def test_stop_all_handler_wakes_poller_for_immediate_refresh(tmp_appdata: Path) -> None:
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(next_statuses={"A": _status()})
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
+    app._icon = _FakeIcon(icon=icons.load("running"))
+    app._handlers().on_stop_all()
+    assert app._wake_event.is_set()
+
+
+def test_restart_handler_wakes_poller_after_completion(tmp_appdata: Path) -> None:
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(next_statuses={"A": _status()})
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
+    app._icon = _FakeIcon(icon=icons.load("running"))
+    app._handlers().on_restart(_project("A"))
+    import time
+    deadline = time.monotonic() + 1.0
+    while not app._wake_event.is_set() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert app._wake_event.is_set()
+
+
+def test_poll_loop_ticks_immediately_on_wake(tmp_appdata: Path, monkeypatch: Any) -> None:
+    cfg = config.Config(projects=[_project("A")])
+    orch = _FakeOrchestrator(next_statuses={"A": _status()})
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
+    app._icon = _FakeIcon(icon=icons.load("stopped"))
+
+    ticks: list[int] = []
+
+    def fake_tick() -> None:
+        ticks.append(1)
+        if len(ticks) >= 2:
+            # Ask the loop to exit; set wake too so the wait returns at once,
+            # keeping the test off the 3 s poll interval.
+            app._stop_event.set()
+            app._wake_event.set()
+
+    monkeypatch.setattr(app, "_poll_tick", fake_tick)
+    # Pre-arm: without early-wake support the loop would block a full poll
+    # interval after the first tick and this test would hang ~3 s.
+    app._wake_event.set()
+
+    import time
+    start = time.monotonic()
+    app._poll_loop()
+    elapsed = time.monotonic() - start
+
+    assert len(ticks) == 2
+    assert elapsed < 1.0  # both ticks happened without waiting out _POLL_INTERVAL_S
+
+
 def test_run_schedules_auto_start_when_configured(
     tmp_appdata: Path, monkeypatch: Any
 ) -> None:

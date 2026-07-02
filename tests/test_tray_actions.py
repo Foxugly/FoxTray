@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -404,6 +405,24 @@ def test_on_restart_calls_stop_then_start_in_background_thread() -> None:
     assert orch.stopped == ["Demo"]
     assert orch.started == ["Demo"]
     assert user_initiated == {"Demo"}
+
+
+def test_on_restart_invokes_on_done_after_completion() -> None:
+    orch = _FakeOrchestrator()
+    icon = _FakeIcon()
+    done = threading.Event()
+    actions.on_restart(orch, _project(), icon, set(), on_done=done.set)
+    assert done.wait(1.0)
+    assert orch.stopped == ["Demo"]
+    assert orch.started == ["Demo"]
+
+
+def test_on_restart_invokes_on_done_even_on_exception() -> None:
+    orch = _FakeOrchestrator(raises=RuntimeError("boom"))
+    icon = _FakeIcon()
+    done = threading.Event()
+    actions.on_restart(orch, _project(), icon, set(), on_done=done.set)
+    assert done.wait(1.0)
 
 
 def test_on_restart_notifies_on_exception_in_thread() -> None:

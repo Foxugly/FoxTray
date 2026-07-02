@@ -392,6 +392,11 @@ class TrayApp:
         self._prev_icon_state: IconState = "stopped"
         self._user_initiated_stop: set[str] = set()
         self._stop_event = threading.Event()
+        # Set by request_refresh() to wake the poller for an immediate tick
+        # (icon + tooltip) after a user-initiated state change, instead of
+        # waiting out the full _POLL_INTERVAL_S. Also set on shutdown so the
+        # poller thread exits promptly rather than sitting out the interval.
+        self._wake_event = threading.Event()
         # Guards the (_cfg, _orchestrator, _prev_statuses) triple. Without
         # it, _reload_config (pystray menu thread) can tear a _poll_tick
         # in progress on the poller thread — the tick would observe the
@@ -430,6 +435,7 @@ class TrayApp:
             self._icon.run()
         finally:
             self._stop_event.set()
+            self._wake_event.set()  # unblock the poller's wait so it exits at once
             poller.join(timeout=_POLL_INTERVAL_S + 1.0)
             url_refresher.join(timeout=_URL_REFRESH_INTERVAL_S + 1.0)
             self._toast_manager.stop()
@@ -458,10 +464,22 @@ class TrayApp:
             self._orchestrator.pending_starts.discard(project.name)
             log.warning("auto_start failed for %s", project.name, exc_info=True)
 
+    def request_refresh(self) -> None:
+        """Wake the poll loop for an immediate tick so the icon and tooltip
+        reflect a user-initiated state change (start/stop/restart) at once,
+        instead of lagging up to ``_POLL_INTERVAL_S`` behind. Safe to call
+        from any thread — it only sets an event."""
+        self._wake_event.set()
+
     def _poll_loop(self) -> None:
         while not self._stop_event.is_set():
             self._poll_tick()
-            self._stop_event.wait(_POLL_INTERVAL_S)
+            # Wake early on a user-initiated change (request_refresh) or on
+            # shutdown; otherwise fall through on the normal poll cadence.
+            # Cleared each iteration so a single request yields exactly one
+            # extra tick.
+            self._wake_event.wait(_POLL_INTERVAL_S)
+            self._wake_event.clear()
 
     def _url_refresh_loop(self) -> None:
         """Background loop: blocking ``http_ok`` lives here, never on the poll
@@ -645,17 +663,29 @@ class TrayApp:
             a = state_mod.load().active
             return [a.name] if a is not None else []
 
+        def _refresh_after(fn: Callable[[], None]) -> None:
+            """Run a synchronous state-changing handler, then wake the poller
+            regardless of outcome so the tooltip/icon refresh immediately."""
+            try:
+                fn()
+            finally:
+                self.request_refresh()
+
         # Lambdas read self._user_initiated_stop at click time, not menu-open
         # time. _poll_tick may atomically swap the set between menu-open and
         # click; capturing the old reference would silently drop the user's
         # stop-intent flag.
         return Handlers(
-            on_start=lambda p: actions.on_start(orch, p, icon),
-            on_stop=lambda p: actions.on_stop(orch, p, icon, self._user_initiated_stop),
+            on_start=lambda p: _refresh_after(lambda: actions.on_start(orch, p, icon)),
+            on_stop=lambda p: _refresh_after(
+                lambda: actions.on_stop(orch, p, icon, self._user_initiated_stop)
+            ),
             on_open_browser=lambda p: actions.on_open_browser(p, icon),
             on_open_folder=lambda path: actions.on_open_folder(path, icon),
-            on_stop_all=lambda: actions.on_stop_all(
-                orch, icon, self._user_initiated_stop, _active_names()
+            on_stop_all=lambda: _refresh_after(
+                lambda: actions.on_stop_all(
+                    orch, icon, self._user_initiated_stop, _active_names()
+                )
             ),
             on_exit=lambda: actions.on_exit(icon, tm),
             on_stop_all_and_exit=lambda: actions.on_stop_all_and_exit(
@@ -664,7 +694,9 @@ class TrayApp:
             on_run_task=lambda p, t: actions.on_run_task(tm, p, t, icon),
             on_run_script=lambda s: actions.on_run_script(tm, s, icon),
             on_about=lambda: actions.on_about(icon),
-            on_restart=lambda p: actions.on_restart(orch, p, icon, self._user_initiated_stop),
+            on_restart=lambda p: actions.on_restart(
+                orch, p, icon, self._user_initiated_stop, on_done=self.request_refresh,
+            ),
             on_open_logs_folder=lambda: actions.on_open_logs_folder(icon),
             on_open_config=lambda: actions.on_open_config(self._config_path, icon),
             on_reload_config=lambda: actions.on_reload_config(self._reload_config, icon),
