@@ -9,6 +9,9 @@ projects:
 
   - name: ClientPortal
     url: http://localhost:4200
+    # auto_restart: relaunch the pair if a component crashes after it was
+    # confirmed healthy. Capped at 3 restarts / 120 s to avoid crash loops.
+    auto_restart: true
     backend:
       path: D:\Projects\client-portal-server
       venv: .venv

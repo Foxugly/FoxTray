@@ -54,6 +54,113 @@ def test_icon_state_stopped_when_active_but_both_dead() -> None:
     assert tray.compute_icon_state(active, statuses) == "stopped"
 
 
+def test_icon_state_starting_when_pending_and_not_healthy() -> None:
+    active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=False)}
+    assert tray.compute_icon_state(active, statuses, {"FoxRunner"}) == "starting"
+
+
+def test_icon_state_starting_overrides_stopped_while_pending() -> None:
+    active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    statuses = {"FoxRunner": _status()}  # nothing up yet
+    assert tray.compute_icon_state(active, statuses, {"FoxRunner"}) == "starting"
+
+
+def test_icon_state_running_wins_over_pending() -> None:
+    active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
+    # Healthy beats a stale pending flag — never show "starting" for a live app.
+    assert tray.compute_icon_state(active, statuses, {"FoxRunner"}) == "running"
+
+
+def test_tooltip_starting_when_pending() -> None:
+    active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
+    statuses = {"FoxRunner": _status(backend_alive=True, frontend_alive=False)}
+    assert "starting" in tray._tooltip_text(active, statuses, {"FoxRunner"})
+
+
+def test_compute_auto_restarts_fires_on_healthy_to_degraded() -> None:
+    active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
+    prev = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
+    curr = {"A": _status(backend_alive=True, frontend_alive=False)}
+    got = tray.compute_auto_restarts(
+        active, prev, active, curr, suppressed=set(), auto_restart_names={"A"}
+    )
+    assert got == ["A"]
+
+
+def test_compute_auto_restarts_ignores_projects_without_flag() -> None:
+    active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
+    prev = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
+    curr = {"A": _status(backend_alive=True, frontend_alive=False)}
+    got = tray.compute_auto_restarts(
+        active, prev, active, curr, suppressed=set(), auto_restart_names=set()
+    )
+    assert got == []
+
+
+def test_compute_auto_restarts_excludes_user_stops() -> None:
+    active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
+    prev = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
+    curr: dict[str, ProjectStatus] = {"A": _status()}
+    got = tray.compute_auto_restarts(
+        active, prev, None, curr, suppressed={"A"}, auto_restart_names={"A"}
+    )
+    assert got == []
+
+
+def test_compute_auto_restarts_ignores_boot_flap() -> None:
+    # stopped → partial (backend up, frontend booting) is NOT a crash.
+    active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
+    prev: dict[str, ProjectStatus] = {"A": _status()}
+    curr = {"A": _status(backend_alive=True, frontend_alive=False)}
+    got = tray.compute_auto_restarts(
+        None, prev, active, curr, suppressed=set(), auto_restart_names={"A"}
+    )
+    assert got == []
+
+
+def test_within_restart_budget_allows_under_limit_and_prunes() -> None:
+    allowed, pruned = tray.within_restart_budget([10.0, 200.0], now=205.0, window=120.0, limit=3)
+    assert allowed is True
+    assert pruned == [200.0]  # 10.0 is older than the 120 s window, dropped
+
+
+def test_within_restart_budget_blocks_at_limit() -> None:
+    allowed, pruned = tray.within_restart_budget(
+        [100.0, 150.0, 199.0], now=200.0, window=120.0, limit=3
+    )
+    assert allowed is False
+    assert pruned == [100.0, 150.0, 199.0]
+
+
+def test_allow_notification_throttles_identical_within_window() -> None:
+    hist: dict[tuple[str | None, str], float] = {}
+    key = ("A", "⚠ A: frontend crashed")
+    assert tray.allow_notification(hist, key, now=0.0, cooldown=15.0) is True
+    assert tray.allow_notification(hist, key, now=5.0, cooldown=15.0) is False
+    assert tray.allow_notification(hist, key, now=20.0, cooldown=15.0) is True
+
+
+def test_allow_notification_distinct_keys_pass() -> None:
+    hist: dict[tuple[str | None, str], float] = {}
+    assert tray.allow_notification(hist, ("A", "A is up"), now=0.0, cooldown=15.0) is True
+    # Different message for the same project within the window still passes.
+    assert tray.allow_notification(hist, ("A", "⚠ A: frontend crashed"), now=1.0, cooldown=15.0) is True
+
+
+def test_compute_transitions_sets_project_name_on_warnings() -> None:
+    active = state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)
+    prev = {"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)}
+    curr = {"A": _status(backend_alive=True, frontend_alive=False)}
+    notes = tray.compute_transitions(
+        active, prev, active, curr, suppressed=set(), pending_starts=set()
+    )
+    assert len(notes) == 1
+    assert notes[0].project_name == "A"
+    assert notes[0].clickable is False
+
+
 def test_transitions_stopped_to_running_fires_up() -> None:
     prev_active = None
     curr_active = state.ActiveProject(name="FoxRunner", backend_pid=1, frontend_pid=2)
@@ -200,6 +307,7 @@ def _noop_handlers() -> tray.Handlers:
         on_open_logs_folder=lambda: None,
         on_open_config=lambda: None,
         on_reload_config=lambda: None,
+        on_validate_config=lambda: None,
         on_copy_url=lambda u: None,
         on_open_log=lambda path: None,
         on_toggle_autostart=lambda: None,
@@ -446,6 +554,7 @@ def _noop_handlers_with_tasks() -> tray.Handlers:
         on_open_logs_folder=lambda: None,
         on_open_config=lambda: None,
         on_reload_config=lambda: None,
+        on_validate_config=lambda: None,
         on_copy_url=lambda u: None,
         on_open_log=lambda path: None,
         on_toggle_autostart=lambda: None,

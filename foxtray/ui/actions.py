@@ -8,8 +8,9 @@ import sys
 import threading
 import tkinter as tk
 import webbrowser
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Protocol, Sequence
+from typing import Protocol
 
 from foxtray import __version__, config, tasks
 from foxtray.project import Orchestrator
@@ -39,7 +40,7 @@ def _open_url(url: str) -> None:
 
 
 def _open_folder_native(path: Path) -> None:
-    os.startfile(str(path))  # noqa: S606 — Windows-only, user-initiated
+    os.startfile(str(path))
 
 
 def _notify_error(icon: Notifier, exc: Exception) -> None:
@@ -64,7 +65,7 @@ def notify_project_up(
         try:
             show_toast("FoxTray", message, project.url)
             return
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.warning("clickable project toast failed", exc_info=True)
     icon.notify(f"{message}\n{project.url}", title="FoxTray")
 
@@ -73,7 +74,7 @@ def on_start(orchestrator: Orchestrator, project: config.Project, icon: Notifier
     orchestrator.pending_starts.add(project.name)
     try:
         orchestrator.start(project)
-    except Exception as exc:  # noqa: BLE001 — tray must survive any handler error
+    except Exception as exc:
         orchestrator.pending_starts.discard(project.name)
         _notify_error(icon, exc)
 
@@ -87,21 +88,21 @@ def on_stop(
     user_initiated.add(project.name)
     try:
         orchestrator.stop(project.name)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _notify_error(icon, exc)
 
 
 def on_open_browser(project: config.Project, icon: Notifier) -> None:
     try:
         _open_url(project.url)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _notify_error(icon, exc)
 
 
 def on_open_folder(path: Path, icon: Notifier) -> None:
     try:
         _open_folder_native(path)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _notify_error(icon, exc)
 
 
@@ -115,7 +116,7 @@ def on_stop_all(
         user_initiated.add(name)
     try:
         orchestrator.stop_all()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _notify_error(icon, exc)
 
 
@@ -130,7 +131,7 @@ def on_exit(icon: Closable, task_manager: _TaskRunnerProtocol) -> None:
     if killed > 0:
         try:
             icon.notify(f"{killed} task(s) killed", title="FoxTray")  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     icon.stop()
 
@@ -146,14 +147,14 @@ def on_stop_all_and_exit(
         user_initiated.add(name)
     try:
         orchestrator.stop_all()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         if hasattr(icon, "notify"):
             _notify_error(icon, exc)  # type: ignore[arg-type]
     killed = task_manager.kill_all()
     if killed > 0:
         try:
             icon.notify(f"{killed} task(s) killed", title="FoxTray")  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     icon.stop()
 
@@ -171,7 +172,7 @@ def on_run_task(
         )
     except tasks.TaskAlreadyRunning:
         icon.notify(f"{task.name} is already running", title="FoxTray")
-    except Exception as exc:  # noqa: BLE001 — tray must survive any handler error
+    except Exception as exc:
         _notify_error(icon, exc)
 
 
@@ -185,7 +186,7 @@ def on_run_script(
         task_manager.run(key, script.resolved_command(), script.path)
     except tasks.TaskAlreadyRunning:
         icon.notify(f"{script.name} is already running", title="FoxTray")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _notify_error(icon, exc)
 
 
@@ -291,7 +292,7 @@ def on_about(icon: Notifier) -> None:
         _about_dialog_open.set()
         try:
             _show_about_dialog(_ABOUT_TITLE, _ABOUT_BODY)
-        except Exception as exc:  # noqa: BLE001 — MessageBoxW failure must not crash tray
+        except Exception as exc:
             _notify_error(icon, exc)
         finally:
             _about_dialog_open.clear()
@@ -316,13 +317,13 @@ def on_restart(
         try:
             orchestrator.stop(project.name)
             orchestrator.start(project)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _notify_error(icon, exc)
         finally:
             if on_done is not None:
                 try:
                     on_done()
-                except Exception:  # noqa: BLE001 — refresh hook must not crash the worker
+                except Exception:
                     log.warning("on_restart on_done hook failed", exc_info=True)
     threading.Thread(target=_run, name=f"restart-{project.name}", daemon=True).start()
 
@@ -331,7 +332,7 @@ def on_open_logs_folder(icon: Notifier) -> None:
     from foxtray import paths
     try:
         _open_folder_native(paths.logs_dir())
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _notify_error(icon, exc)
 
 
@@ -347,7 +348,7 @@ def on_copy_url(url: str, icon: Notifier) -> None:
     try:
         _copy_to_clipboard_windows(url)
         icon.notify(f"URL copied: {url}", title="FoxTray")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _notify_error(icon, exc)
 
 
@@ -357,7 +358,7 @@ def on_open_log(log_path: Path, icon: Notifier) -> None:
             icon.notify(f"No log yet: {log_path.name}", title="FoxTray")
             return
         _open_folder_native(log_path)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _notify_error(icon, exc)
 
 
@@ -366,7 +367,7 @@ def on_open_config(config_path: Path | None, icon: Notifier) -> None:
         if config_path is None:
             raise RuntimeError("No config path available")
         _open_folder_native(config_path)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _notify_error(icon, exc)
 
 
@@ -374,7 +375,25 @@ def on_reload_config(reload_config: ReloadableConfig, icon: Notifier) -> None:
     try:
         reload_config()
         icon.notify("Config reloaded", title="FoxTray")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
+        _notify_error(icon, exc)
+
+
+def on_validate_config(config_path: Path | None, icon: Notifier) -> None:
+    """Parse config.yaml and report the result without applying it — lets the
+    user check an edit before reloading. Reports the specific ConfigError
+    (which already carries the offending project/task context) on failure."""
+    try:
+        if config_path is None:
+            raise RuntimeError("No config path available")
+        cfg = config.load(config_path)
+        icon.notify(
+            f"Config OK — {len(cfg.projects)} project(s), {len(cfg.scripts)} script(s)",
+            title="FoxTray",
+        )
+    except config.ConfigError as exc:
+        icon.notify(f"Config invalid: {exc}", title="FoxTray error")
+    except Exception as exc:
         _notify_error(icon, exc)
 
 
@@ -393,5 +412,5 @@ def on_toggle_autostart(icon: Notifier) -> None:
         else:
             autostart.enable(Path(sys.executable))
             icon.notify("Autostart enabled", title="FoxTray")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _notify_error(icon, exc)

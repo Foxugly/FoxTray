@@ -201,7 +201,10 @@ def main(argv: list[str] | None = None) -> int:
         argv = ["tray"]
     _configure_logging()
     args = build_parser().parse_args(argv)
-    log.info("FoxTray starting command=%s config=%s frozen=%s", args.command, args.config, getattr(sys, "frozen", False))
+    log.info(
+        "FoxTray starting command=%s config=%s frozen=%s",
+        args.command, args.config, getattr(sys, "frozen", False),
+    )
     state.clear_if_orphaned()
     try:
         rc = args.func(args)

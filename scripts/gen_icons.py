@@ -3,7 +3,7 @@
 Usage:
     python scripts/gen_icons.py
 
-Writes three 32x32 RGBA PNGs into assets/.
+Writes four 32x32 RGBA PNGs into assets/.
 """
 from __future__ import annotations
 
@@ -15,9 +15,10 @@ _ASSETS = Path(__file__).resolve().parent.parent / "assets"
 _SIZE = 32
 _PADDING = 2  # leave a 2px margin so the disc doesn't touch the bounding box
 _COLORS = {
-    "running": (0x33, 0xAA, 0x33, 0xFF),   # green
-    "partial": (0xEE, 0x99, 0x00, 0xFF),   # orange
-    "stopped": (0x88, 0x88, 0x88, 0xFF),   # grey
+    "running": (0x33, 0xAA, 0x33, 0xFF),    # green
+    "starting": (0x22, 0x88, 0xDD, 0xFF),   # blue — booting, not yet healthy
+    "partial": (0xEE, 0x99, 0x00, 0xFF),    # orange
+    "stopped": (0x88, 0x88, 0x88, 0xFF),    # grey
 }
 
 

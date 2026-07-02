@@ -3,16 +3,16 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 import pystray
 
 from foxtray import config as config_mod
-from foxtray import paths
+from foxtray import paths, tasks
 from foxtray import state as state_mod
-from foxtray import tasks
 from foxtray.process import ProcessManager
 from foxtray.project import Orchestrator, ProjectStatus
 from foxtray.ui import actions, icons
@@ -25,6 +25,14 @@ _POLL_INTERVAL_S = 3.0
 # Separate cadence for the blocking http_ok probe — matches the poll cadence
 # by default, but decoupled so either can be tuned without affecting the other.
 _URL_REFRESH_INTERVAL_S = 3.0
+# Auto-restart crash-loop guard: at most _AUTO_RESTART_MAX restarts within a
+# rolling _AUTO_RESTART_WINDOW_S before FoxTray gives up and leaves the project
+# down (so a permanently-broken app can't be relaunched forever).
+_AUTO_RESTART_WINDOW_S = 120.0
+_AUTO_RESTART_MAX = 3
+# Anti-spam: an identical (project, message) balloon is shown at most once per
+# this window, so a flapping project can't flood the notification area.
+_NOTIFY_COOLDOWN_S = 15.0
 
 
 @dataclass(frozen=True)
@@ -32,6 +40,10 @@ class Notification:
     title: str
     message: str
     project_name: str | None = None
+    # True only for "project is up" events, which render as a clickable toast
+    # (opens the URL). project_name is set on *every* notification now — it keys
+    # the anti-spam throttle — so it can no longer double as the clickable flag.
+    clickable: bool = False
 
 
 @dataclass(frozen=True)
@@ -63,6 +75,7 @@ class Handlers:
     on_open_logs_folder: Callable[[], None]
     on_open_config: Callable[[], None]
     on_reload_config: Callable[[], None]
+    on_validate_config: Callable[[], None]
     on_copy_url: Callable[[str], None]
     on_open_log: Callable[[Path], None]
     on_toggle_autostart: Callable[[], None]
@@ -79,13 +92,20 @@ def _status_to_icon_state(status: ProjectStatus) -> IconState:
 def compute_icon_state(
     active: state_mod.ActiveProject | None,
     statuses: dict[str, ProjectStatus],
+    pending_starts: set[str] | frozenset[str] = frozenset(),
 ) -> IconState:
     if active is None:
         return "stopped"
     status = statuses.get(active.name)
     if status is None:
         return "stopped"
-    return _status_to_icon_state(status)
+    base = _status_to_icon_state(status)
+    # While a project is booting (user/auto asked to start, URL not yet healthy)
+    # show a distinct "starting" icon instead of the ambiguous "partial" orange,
+    # which otherwise conflates "coming up" with "a component died".
+    if base != "running" and active.name in pending_starts:
+        return "starting"
+    return base
 
 
 def _project_icon_state(
@@ -136,47 +156,115 @@ def compute_transitions(
             continue
 
         if prev_state == "stopped" and curr_state == "running":
-            notifications.append(Notification("FoxTray", f"{name} is up", project_name=name))
+            notifications.append(
+                Notification("FoxTray", f"{name} is up", project_name=name, clickable=True)
+            )
             pending_starts.discard(name)
         elif prev_state == "stopped" and curr_state == "partial":
             if name not in pending_starts:
                 notifications.append(
-                    Notification("FoxTray", f"{name} started but one component failed")
+                    Notification("FoxTray", f"{name} started but one component failed", project_name=name)
                 )
             # else: silent — we're still booting
         elif prev_state == "running" and curr_state == "partial":
             dead = _dead_component(prev_statuses[name], curr_statuses[name])
             notifications.append(
-                Notification("FoxTray", f"⚠ {name}: {dead} crashed")
+                Notification("FoxTray", f"⚠ {name}: {dead} crashed", project_name=name)
             )
         elif prev_state == "partial" and curr_state == "running":
             if name in pending_starts:
-                notifications.append(Notification("FoxTray", f"{name} is up", project_name=name))
+                notifications.append(
+                    Notification("FoxTray", f"{name} is up", project_name=name, clickable=True)
+                )
                 pending_starts.discard(name)
             else:
-                notifications.append(Notification("FoxTray", f"{name} recovered"))
+                notifications.append(Notification("FoxTray", f"{name} recovered", project_name=name))
         elif prev_state == "running" and curr_state == "stopped":
             if name not in suppressed:
                 notifications.append(
-                    Notification("FoxTray", f"⚠ {name} stopped unexpectedly")
+                    Notification("FoxTray", f"⚠ {name} stopped unexpectedly", project_name=name)
                 )
         elif prev_state == "partial" and curr_state == "stopped":
             if name in pending_starts:
                 notifications.append(
-                    Notification("FoxTray", f"⚠ {name} failed to start")
+                    Notification("FoxTray", f"⚠ {name} failed to start", project_name=name)
                 )
                 pending_starts.discard(name)
             elif name not in suppressed:
                 notifications.append(
-                    Notification("FoxTray", f"⚠ {name} fully stopped")
+                    Notification("FoxTray", f"⚠ {name} fully stopped", project_name=name)
                 )
 
     return notifications
 
 
+def compute_auto_restarts(
+    prev_active: state_mod.ActiveProject | None,
+    prev_statuses: dict[str, ProjectStatus],
+    curr_active: state_mod.ActiveProject | None,
+    curr_statuses: dict[str, ProjectStatus],
+    suppressed: set[str],
+    auto_restart_names: set[str] | frozenset[str],
+) -> list[str]:
+    """Names of auto_restart projects that just degraded from a confirmed-healthy
+    state and should be relaunched.
+
+    Only a ``running`` → (``partial`` | ``stopped``) edge qualifies: a project
+    must have reached full health (backend + frontend + ``url_ok``) before the
+    drop, so boot-time flapping never triggers a restart. User-initiated stops
+    (``suppressed``) are excluded so a manual Stop is never fought by the poller.
+    """
+    names = set(prev_statuses) | set(curr_statuses)
+    if prev_active is not None:
+        names.add(prev_active.name)
+    if curr_active is not None:
+        names.add(curr_active.name)
+
+    result: list[str] = []
+    for name in sorted(names):
+        if name not in auto_restart_names or name in suppressed:
+            continue
+        prev_state = _project_icon_state(name, prev_active, prev_statuses.get(name))
+        curr_state = _project_icon_state(name, curr_active, curr_statuses.get(name))
+        if prev_state == "running" and curr_state != "running":
+            result.append(name)
+    return result
+
+
+def within_restart_budget(
+    timestamps: list[float], now: float, window: float, limit: int
+) -> tuple[bool, list[float]]:
+    """Return ``(allowed, pruned)`` for the crash-loop guard.
+
+    ``pruned`` is ``timestamps`` with entries older than ``window`` dropped;
+    ``allowed`` is True when fewer than ``limit`` restarts remain in the window.
+    Pure — the caller appends ``now`` to ``pruned`` when it acts.
+    """
+    recent = [t for t in timestamps if now - t < window]
+    return len(recent) < limit, recent
+
+
+def allow_notification(
+    history: dict[tuple[str | None, str], float],
+    key: tuple[str | None, str],
+    now: float,
+    cooldown: float,
+) -> bool:
+    """Throttle repeated *identical* balloons. Returns True (recording ``now``)
+    unless the same ``(project, message)`` key fired within ``cooldown``. Distinct
+    transitions always pass — only a flapping project's identical repeats are
+    collapsed."""
+    last = history.get(key)
+    if last is not None and now - last < cooldown:
+        return False
+    history[key] = now
+    return True
+
+
 def _project_label(state: IconState) -> str:
     return {
         "running": "RUNNING",
+        "starting": "starting…",
         "partial": "PARTIAL",
         "stopped": "stopped",
     }[state]
@@ -234,12 +322,14 @@ def _project_submenu(
     entries.append(MenuItemSpec(text="", separator=True))
     entries.append(MenuItemSpec(
         text="Open backend log",
-        action=lambda p=paths.log_file(project.name, "backend"): handlers.on_open_log(p),
+        # Default-arg capture of the log path at menu-build time (idiomatic
+        # late-binding avoidance), not a mutable/side-effecting default.
+        action=lambda p=paths.log_file(project.name, "backend"): handlers.on_open_log(p),  # noqa: B008
     ))
     if project.frontend is not None:
         entries.append(MenuItemSpec(
             text="Open frontend log",
-            action=lambda p=paths.log_file(project.name, "frontend"): handlers.on_open_log(p),
+            action=lambda p=paths.log_file(project.name, "frontend"): handlers.on_open_log(p),  # noqa: B008
         ))
     if project.tasks:
         task_specs = tuple(
@@ -304,6 +394,10 @@ def build_menu_items(
         text="Reload config.yaml",
         action=handlers.on_reload_config,
     ))
+    items.append(MenuItemSpec(
+        text="Validate config.yaml",
+        action=handlers.on_validate_config,
+    ))
     from foxtray import autostart as autostart_mod
     items.append(MenuItemSpec(text="", separator=True))
     items.append(MenuItemSpec(
@@ -350,6 +444,7 @@ def _script_spec(
 def _tooltip_text(
     active: state_mod.ActiveProject | None,
     statuses: dict[str, ProjectStatus],
+    pending_starts: set[str] | frozenset[str] = frozenset(),
 ) -> str:
     if active is None:
         return "FoxTray — idle"
@@ -358,6 +453,10 @@ def _tooltip_text(
         return f"FoxTray — {active.name} (unknown)"
     if status.running and status.url_ok:
         return f"FoxTray — {active.name} RUNNING"
+    # Booting and not yet healthy → say so explicitly rather than "PARTIAL",
+    # matching the distinct "starting" icon.
+    if active.name in pending_starts:
+        return f"FoxTray — {active.name} (starting…)"
     if status.running:
         return f"FoxTray — {active.name} (starting…)"
     if status.backend_alive:
@@ -397,6 +496,14 @@ class TrayApp:
         # waiting out the full _POLL_INTERVAL_S. Also set on shutdown so the
         # poller thread exits promptly rather than sitting out the interval.
         self._wake_event = threading.Event()
+        # Per-project restart timestamps (crash-loop guard) and per-(project,
+        # message) last-shown timestamps (balloon anti-spam). Touched only on
+        # the poller thread, so no extra locking needed.
+        self._auto_restart_history: dict[str, list[float]] = {}
+        self._notify_history: dict[tuple[str | None, str], float] = {}
+        # Injectable monotonic clock so tests can drive the time-based guards
+        # deterministically.
+        self._clock: Callable[[], float] = time.monotonic
         # Guards the (_cfg, _orchestrator, _prev_statuses) triple. Without
         # it, _reload_config (pystray menu thread) can tear a _poll_tick
         # in progress on the poller thread — the tick would observe the
@@ -460,7 +567,7 @@ class TrayApp:
         self._orchestrator.pending_starts.add(project.name)
         try:
             self._orchestrator.start(project)
-        except Exception:  # noqa: BLE001
+        except Exception:
             self._orchestrator.pending_starts.discard(project.name)
             log.warning("auto_start failed for %s", project.name, exc_info=True)
 
@@ -503,7 +610,7 @@ class TrayApp:
                     )
                 if project is not None:
                     orchestrator.refresh_url_ok(project)
-            except Exception:  # noqa: BLE001 — background loop must never die
+            except Exception:
                 log.warning("url refresh tick failed", exc_info=True)
             self._stop_event.wait(_URL_REFRESH_INTERVAL_S)
 
@@ -535,12 +642,24 @@ class TrayApp:
                     suppressed=suppressed,
                     pending_starts=self._orchestrator.pending_starts,
                 )
-                new_icon_state = compute_icon_state(curr_active, curr_statuses)
-                tooltip = _tooltip_text(curr_active, curr_statuses)
+                # Snapshot pending_starts AFTER compute_transitions (which may
+                # discard names) so the icon/tooltip reflect the post-tick set.
+                pending = set(self._orchestrator.pending_starts)
+                auto_restart_names = {p.name for p in self._cfg.projects if p.auto_restart}
+                restarts = compute_auto_restarts(
+                    self._prev_active, self._prev_statuses,
+                    curr_active, curr_statuses,
+                    suppressed=suppressed,
+                    auto_restart_names=auto_restart_names,
+                )
+                new_icon_state = compute_icon_state(curr_active, curr_statuses, pending)
+                tooltip = _tooltip_text(curr_active, curr_statuses, pending)
 
-                # Snapshot the cfg project list so the notify step below
-                # (which may take a moment) doesn't hold the lock forever.
+                # Snapshot the cfg project list + orchestrator so the notify /
+                # restart steps below (which may take a moment) don't hold the
+                # lock, yet still act on a consistent (cfg, orchestrator) pair.
                 cfg_projects = tuple(self._cfg.projects)
+                orchestrator = self._orchestrator
 
                 self._prev_active = curr_active
                 self._prev_statuses = curr_statuses
@@ -548,8 +667,16 @@ class TrayApp:
             # Notify / mutate icon OUTSIDE the lock — pystray calls can
             # block briefly (Win32 shell), and we don't want _reload_config
             # to wait on them.
+            now = self._clock()
             for note in transitions:
-                if note.project_name is not None:
+                # Anti-spam: collapse identical (project, message) balloons
+                # inside the cooldown window so a flapping project can't flood.
+                if not allow_notification(
+                    self._notify_history, (note.project_name, note.message),
+                    now, _NOTIFY_COOLDOWN_S,
+                ):
+                    continue
+                if note.clickable and note.project_name is not None:
                     project = next(
                         (p for p in cfg_projects if p.name == note.project_name),
                         None,
@@ -560,6 +687,11 @@ class TrayApp:
                         )
                         continue
                 self._icon.notify(note.message, title=note.title)
+
+            # Auto-restart projects that just crashed after being healthy,
+            # honouring the crash-loop budget.
+            for name in restarts:
+                self._maybe_auto_restart(name, orchestrator, cfg_projects, now)
 
             if new_icon_state != self._prev_icon_state:
                 self._icon.icon = icons.load(new_icon_state)
@@ -577,10 +709,43 @@ class TrayApp:
 
             try:
                 self._icon.title = tooltip
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.warning("tooltip update failed", exc_info=True)
-        except Exception:  # noqa: BLE001 — poll loop must never die
+        except Exception:
             log.warning("poll tick failed", exc_info=True)
+
+    def _maybe_auto_restart(
+        self,
+        name: str,
+        orchestrator: Orchestrator,
+        cfg_projects: tuple[config_mod.Project, ...],
+        now: float,
+    ) -> None:
+        """Relaunch ``name`` unless the crash-loop budget is spent. Mirrors a
+        manual Restart (same user_initiated suppression + refresh hook) so
+        FoxTray effectively clicks Restart on the user's behalf."""
+        icon = self._icon
+        if icon is None:
+            return
+        allowed, recent = within_restart_budget(
+            self._auto_restart_history.get(name, []),
+            now, _AUTO_RESTART_WINDOW_S, _AUTO_RESTART_MAX,
+        )
+        if not allowed:
+            self._auto_restart_history[name] = recent
+            log.warning("auto-restart giving up for %s (crash loop)", name)
+            icon.notify(f"⚠ {name}: auto-restart giving up (crash loop)", title="FoxTray")
+            return
+        recent.append(now)
+        self._auto_restart_history[name] = recent
+        project = next((p for p in cfg_projects if p.name == name), None)
+        if project is None:
+            return
+        icon.notify(f"↻ auto-restarting {name}", title="FoxTray")
+        actions.on_restart(
+            orchestrator, project, icon,
+            self._user_initiated_stop, on_done=self.request_refresh,
+        )
 
     def _on_task_complete(self, key: str, exit_code: int) -> None:
         if self._icon is None:
@@ -617,7 +782,7 @@ class TrayApp:
             statuses = {
                 p.name: orchestrator.status(p) for p in cfg.projects
             }
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.warning("menu build failed", exc_info=True)
             return (pystray.MenuItem("FoxTray error", None, enabled=False),)
         handlers = self._handlers()
@@ -700,6 +865,7 @@ class TrayApp:
             on_open_logs_folder=lambda: actions.on_open_logs_folder(icon),
             on_open_config=lambda: actions.on_open_config(self._config_path, icon),
             on_reload_config=lambda: actions.on_reload_config(self._reload_config, icon),
+            on_validate_config=lambda: actions.on_validate_config(self._config_path, icon),
             on_copy_url=lambda url: actions.on_copy_url(url, icon),
             on_open_log=lambda path: actions.on_open_log(path, icon),
             on_toggle_autostart=lambda: actions.on_toggle_autostart(icon),

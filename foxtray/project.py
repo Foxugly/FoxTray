@@ -180,8 +180,13 @@ class Orchestrator:
             running=backend_alive and (frontend_alive or not has_frontend),
             backend_alive=backend_alive,
             frontend_alive=frontend_alive,
-            backend_port_listening=health.port_listening(project.backend.port) if backend_alive else False,
-            frontend_port_listening=health.port_listening(project.frontend.port) if (has_frontend and frontend_alive) else False,
+            backend_port_listening=(
+                health.port_listening(project.backend.port) if backend_alive else False
+            ),
+            frontend_port_listening=(
+                health.port_listening(project.frontend.port)
+                if (has_frontend and frontend_alive) else False
+            ),
             url_ok=url_ok,
         )
 

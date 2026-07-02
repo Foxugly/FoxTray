@@ -1,0 +1,35 @@
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+# High-signal set. flake8-bandit (S), blind-except (BLE) and simplify (SIM) are
+# intentionally omitted: this tray app deliberately catches broadly ("must never
+# die") and shells out to a few fixed commands, so those rules would be noise.
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes (unused imports/vars, undefined names)
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear (real bug patterns)
+    "C4",   # flake8-comprehensions
+    "RUF",  # ruff-specific
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# frozenset() is an immutable, side-effect-free default — safe to use directly.
+extend-immutable-calls = ["frozenset"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test stub classes use bare mutable class attrs as ad-hoc defaults.
+"tests/**" = ["RUF012"]
+
+[tool.coverage.run]
+source = ["foxtray"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+# Current coverage is ~84%; gate a little below to lock it in without flaking.
+fail_under = 80

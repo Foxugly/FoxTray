@@ -27,7 +27,7 @@ def tcp_server():
         while not stop.is_set():
             try:
                 conn, _ = server.accept()
-            except (socket.timeout, OSError):
+            except (TimeoutError, OSError):
                 continue
             conn.close()
 
@@ -50,7 +50,7 @@ def test_port_listening_false_when_nothing_there() -> None:
 
 
 class _OkHandler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         self.send_response(200)
         self.end_headers()
 
@@ -103,7 +103,7 @@ def tcp_server_ipv6():
         while not stop.is_set():
             try:
                 conn, _ = server.accept()
-            except (socket.timeout, OSError):
+            except (TimeoutError, OSError):
                 continue
             conn.close()
 

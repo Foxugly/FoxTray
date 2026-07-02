@@ -4,7 +4,6 @@ import pytest
 
 from foxtray import config
 
-
 SAMPLE_YAML = """
 projects:
   - name: FoxRunner
@@ -34,6 +33,31 @@ def test_load_parses_single_project(tmp_path: Path) -> None:
     assert foxrunner.url == "http://localhost:4200"
     assert foxrunner.backend.port == 8000
     assert foxrunner.frontend.port == 4200
+
+
+def test_auto_restart_defaults_to_false(tmp_path: Path) -> None:
+    cfg = config.load(write_config(tmp_path, SAMPLE_YAML))
+    assert cfg.projects[0].auto_restart is False
+
+
+def test_auto_restart_parsed_when_true(tmp_path: Path) -> None:
+    body = SAMPLE_YAML.replace(
+        "    url: http://localhost:4200\n",
+        "    url: http://localhost:4200\n    auto_restart: true\n",
+        1,
+    )
+    cfg = config.load(write_config(tmp_path, body))
+    assert cfg.projects[0].auto_restart is True
+
+
+def test_auto_restart_rejects_non_boolean(tmp_path: Path) -> None:
+    body = SAMPLE_YAML.replace(
+        "    url: http://localhost:4200\n",
+        "    url: http://localhost:4200\n    auto_restart: yes-please\n",
+        1,
+    )
+    with pytest.raises(config.ConfigError, match="auto_restart"):
+        config.load(write_config(tmp_path, body))
 
 
 def test_load_allows_project_without_frontend(tmp_path: Path) -> None:
@@ -432,7 +456,6 @@ def test_project_path_root_rejects_relative(tmp_path: Path) -> None:
         config.load(write_config(tmp_path, yaml_body))
 
 
-import os
 
 
 def test_backend_path_expands_environment_variable(

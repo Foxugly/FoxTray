@@ -71,7 +71,7 @@ class ToastManager:
         try:
             self._root = tk.Tk()
             self._root.withdraw()
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.warning("ToastManager: Tk root creation failed", exc_info=True)
             self._ready.set()
             return
@@ -79,13 +79,13 @@ class ToastManager:
         self._root.after(_DRAIN_INTERVAL_MS, self._drain)
         try:
             self._root.mainloop()
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.warning("ToastManager mainloop crashed", exc_info=True)
         finally:
             try:
                 if self._root is not None:
                     self._root.destroy()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.warning("ToastManager root destroy failed", exc_info=True)
 
     def _drain(self) -> None:
@@ -98,7 +98,7 @@ class ToastManager:
                     return
                 try:
                     self._show_one(req)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     log.warning("ToastManager: show_one failed", exc_info=True)
         except queue.Empty:
             pass
@@ -142,7 +142,7 @@ class ToastManager:
             webbrowser.open(req.url)
             try:
                 toast.destroy()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.warning("toast destroy after click failed", exc_info=True)
 
         link.bind("<Button-1>", _open_and_close)

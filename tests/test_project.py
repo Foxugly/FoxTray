@@ -434,7 +434,7 @@ def test_status_reads_url_ok_from_cache_never_blocks(
     http_calls: list[str] = []
     monkeypatch.setattr(
         project.health, "http_ok",
-        lambda url, timeout=1.0: http_calls.append(url) or True,  # noqa: BLE001
+        lambda url, timeout=1.0: http_calls.append(url) or True,
     )
 
     orch = project.Orchestrator(manager=_FakeManager(), cfg=_cfg_with(sample_project))

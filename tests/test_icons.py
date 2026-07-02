@@ -22,6 +22,12 @@ def test_load_returns_image_for_stopped() -> None:
     assert isinstance(img, Image.Image)
 
 
+def test_load_returns_image_for_starting() -> None:
+    img = icons.load("starting")
+    assert isinstance(img, Image.Image)
+    assert img.size == (32, 32)
+
+
 def test_load_is_cached() -> None:
     first = icons.load("running")
     second = icons.load("running")
