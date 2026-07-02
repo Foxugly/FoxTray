@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging
 import subprocess
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from foxtray import logs, process
 
@@ -62,7 +62,7 @@ class TaskManager:
             self._running.pop(key, None)
         try:
             self._on_complete(key, exit_code)
-        except Exception:  # noqa: BLE001 — callback must not crash watcher
+        except Exception:
             log.warning("task %s on_complete callback failed", key, exc_info=True)
 
     def kill_all(self) -> int:
@@ -72,6 +72,6 @@ class TaskManager:
         for key, popen in victims:
             try:
                 self._kill_tree(popen.pid)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.warning("kill_all: failed to kill %s", key, exc_info=True)
         return len(victims)

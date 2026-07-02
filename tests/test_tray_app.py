@@ -382,6 +382,106 @@ def test_poll_tick_updates_icon_title_with_status(
     assert "A" in icon.title
 
 
+def _auto_project(name: str) -> config.Project:
+    import dataclasses
+    return dataclasses.replace(_project(name), auto_restart=True)
+
+
+def test_poll_tick_auto_restarts_after_healthy_crash(
+    tmp_appdata: Path, monkeypatch: Any
+) -> None:
+    cfg = config.Config(projects=[_auto_project("A")])
+    orch = _FakeOrchestrator(
+        next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
+    )
+    icon = _FakeIcon(icon=icons.load("running"))
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
+    app._icon = icon
+    restarts: list[str] = []
+    monkeypatch.setattr(
+        tray.actions, "on_restart",
+        lambda o, p, i, u, on_done=None: restarts.append(p.name),
+    )
+    monkeypatch.setattr(
+        tray.actions, "notify_project_up",
+        lambda project, icon, show_toast=None: None,
+    )
+    state.save(state.State(active=state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)))
+    monkeypatch.setattr("foxtray.state.pid_alive", lambda pid, ctime: True)
+    monkeypatch.setattr("foxtray.project.psutil.pid_exists", lambda pid: True)
+
+    app._poll_tick()  # healthy baseline
+    orch.next_statuses["A"] = _status(backend_alive=True, frontend_alive=False)  # frontend crash
+    app._poll_tick()
+
+    assert restarts == ["A"]
+    assert any("auto-restarting A" in message for _t, message in icon.notifications)
+
+
+def test_poll_tick_auto_restart_gives_up_over_budget(
+    tmp_appdata: Path, monkeypatch: Any
+) -> None:
+    cfg = config.Config(projects=[_auto_project("A")])
+    orch = _FakeOrchestrator(
+        next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
+    )
+    icon = _FakeIcon(icon=icons.load("running"))
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
+    app._icon = icon
+    app._clock = lambda: 1000.0
+    app._auto_restart_history["A"] = [999.0, 999.5, 999.8]  # 3 within the 120 s window
+    restarts: list[str] = []
+    monkeypatch.setattr(tray.actions, "on_restart", lambda *a, **k: restarts.append("x"))
+    monkeypatch.setattr(
+        tray.actions, "notify_project_up",
+        lambda project, icon, show_toast=None: None,
+    )
+    state.save(state.State(active=state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)))
+    monkeypatch.setattr("foxtray.state.pid_alive", lambda pid, ctime: True)
+    monkeypatch.setattr("foxtray.project.psutil.pid_exists", lambda pid: True)
+
+    app._poll_tick()  # healthy baseline
+    orch.next_statuses["A"] = _status(backend_alive=True, frontend_alive=False)
+    app._poll_tick()
+
+    assert restarts == []
+    assert any("giving up" in message for _t, message in icon.notifications)
+
+
+def test_poll_tick_throttles_repeated_identical_crash(
+    tmp_appdata: Path, monkeypatch: Any
+) -> None:
+    cfg = config.Config(projects=[_project("A")])  # no auto_restart
+    orch = _FakeOrchestrator(
+        next_statuses={"A": _status(backend_alive=True, frontend_alive=True, url_ok=True)},
+    )
+    icon = _FakeIcon(icon=icons.load("running"))
+    app = tray.TrayApp(cfg, orch, _StubProcessManager(), toast_manager=_StubToastManager())  # type: ignore[arg-type]
+    app._icon = icon
+    clock = {"v": 0.0}
+    app._clock = lambda: clock["v"]
+    monkeypatch.setattr(
+        tray.actions, "notify_project_up",
+        lambda project, icon, show_toast=None: None,
+    )
+    state.save(state.State(active=state.ActiveProject(name="A", backend_pid=1, frontend_pid=2)))
+    monkeypatch.setattr("foxtray.state.pid_alive", lambda pid, ctime: True)
+    monkeypatch.setattr("foxtray.project.psutil.pid_exists", lambda pid: True)
+
+    app._poll_tick()  # healthy
+    orch.next_statuses["A"] = _status(backend_alive=True, frontend_alive=False)
+    app._poll_tick()  # crash #1 at t=0 → fires
+    clock["v"] = 5.0
+    orch.next_statuses["A"] = _status(backend_alive=True, frontend_alive=True, url_ok=True)
+    app._poll_tick()  # recover at t=5
+    clock["v"] = 10.0
+    orch.next_statuses["A"] = _status(backend_alive=True, frontend_alive=False)
+    app._poll_tick()  # crash #2 (identical) at t=10 (<15 s) → suppressed
+
+    crashes = [m for _t, m in icon.notifications if "frontend crashed" in m]
+    assert len(crashes) == 1
+
+
 def test_request_refresh_sets_wake_event(tmp_appdata: Path) -> None:
     cfg = config.Config(projects=[_project("A")])
     orch = _FakeOrchestrator(next_statuses={"A": _status()})

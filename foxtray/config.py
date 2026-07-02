@@ -60,7 +60,7 @@ class Task:
     cwd: str  # "backend" | "frontend"
     command: str
 
-    def resolved_command(self, project: "Project") -> list[str]:
+    def resolved_command(self, project: Project) -> list[str]:
         parts = shlex.split(self.command)
         if not parts:
             raise ConfigError(f"task {self.name!r} command is empty")
@@ -68,7 +68,7 @@ class Task:
             return [str(project.backend.python_executable), *parts[1:]]
         return parts
 
-    def resolved_cwd(self, project: "Project") -> Path:
+    def resolved_cwd(self, project: Project) -> Path:
         if self.cwd == "backend":
             return project.backend.path
         if project.frontend is None:
@@ -88,6 +88,7 @@ class Project:
     tasks: tuple[Task, ...] = ()
     path_root: Path | None = None
     health_url: str | None = None
+    auto_restart: bool = False
 
 
 @dataclass(frozen=True)
@@ -257,6 +258,11 @@ def _parse_project(raw: dict[str, Any]) -> Project:
         raise ConfigError(
             f"project {name!r}: health_url must be a non-empty string if present"
         )
+    auto_restart_raw = raw.get("auto_restart", False)
+    if not isinstance(auto_restart_raw, bool):
+        raise ConfigError(
+            f"project {name!r}: auto_restart must be a boolean, got {auto_restart_raw!r}"
+        )
     return Project(
         name=name,
         url=_require(raw, "url", f"project {name!r}"),
@@ -266,6 +272,7 @@ def _parse_project(raw: dict[str, Any]) -> Project:
         tasks=tasks,
         path_root=path_root,
         health_url=health_url_raw,
+        auto_restart=auto_restart_raw,
     )
 
 

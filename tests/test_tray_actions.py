@@ -207,7 +207,9 @@ def test_on_stop_all_and_exit_stops_then_exits() -> None:
     orch = _FakeOrchestrator()
     icon = _Icon()
     user_initiated: set[str] = set()
-    actions.on_stop_all_and_exit(orch, icon, user_initiated, active_names=["FoxRunner"], task_manager=_FakeTaskManager())
+    actions.on_stop_all_and_exit(
+        orch, icon, user_initiated, active_names=["FoxRunner"], task_manager=_FakeTaskManager()
+    )
     assert orch.stop_all_called == 1
     assert user_initiated == {"FoxRunner"}
     assert icon.stopped is True
@@ -405,6 +407,45 @@ def test_on_restart_calls_stop_then_start_in_background_thread() -> None:
     assert orch.stopped == ["Demo"]
     assert orch.started == ["Demo"]
     assert user_initiated == {"Demo"}
+
+
+_VALID_YAML = """
+projects:
+  - name: Demo
+    url: http://localhost:4200
+    backend:
+      path: D:\\\\proj\\\\back
+      venv: .venv
+      command: python manage.py runserver 8000
+      port: 8000
+"""
+
+
+def test_on_validate_config_reports_ok(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(_VALID_YAML, encoding="utf-8")
+    icon = _FakeIcon()
+    actions.on_validate_config(cfg_path, icon)
+    assert any("Config OK" in message and "1 project" in message
+               for _title, message in icon.notifications)
+
+
+def test_on_validate_config_reports_error_with_context(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.yaml"
+    # Project with no backend → ConfigError carrying the project context.
+    cfg_path.write_text(
+        "projects:\n  - name: Demo\n    url: http://localhost:4200\n",
+        encoding="utf-8",
+    )
+    icon = _FakeIcon()
+    actions.on_validate_config(cfg_path, icon)
+    assert any("Config invalid" in message for _title, message in icon.notifications)
+
+
+def test_on_validate_config_handles_missing_path() -> None:
+    icon = _FakeIcon()
+    actions.on_validate_config(None, icon)
+    assert icon.notifications  # notified, did not raise
 
 
 def test_on_restart_invokes_on_done_after_completion() -> None:

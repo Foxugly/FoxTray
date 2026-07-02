@@ -8,7 +8,6 @@ import pytest
 
 from foxtray import process
 
-
 HELPER = Path(__file__).parent / "helpers" / "child_tree.py"
 
 

@@ -4,7 +4,6 @@ import pytest
 
 from foxtray import cli, paths
 
-
 CONFIG_YAML = """
 projects:
   - name: Demo
@@ -66,8 +65,6 @@ def test_unrelated_keyerror_is_not_swallowed(
     demo_config: Path, tmp_appdata: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A KeyError from inside command execution that is NOT a ProjectNotFound must propagate."""
-    original_load = cli.config.load
-
     def _load_raising_bare_keyerror(*args, **kwargs):
         # Simulate some internal subsystem raising a bare KeyError
         raise KeyError("not-a-project-name")

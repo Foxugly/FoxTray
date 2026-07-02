@@ -124,7 +124,7 @@ class ProcessManager:
             new_procs = [p for p in descendants if p.pid not in seen]
             # First sweep always terminates root too; subsequent sweeps terminate
             # only newly-seen descendants (root is already marked in `seen`).
-            batch = ([root] + new_procs) if sweep == 0 else new_procs
+            batch = [root, *new_procs] if sweep == 0 else new_procs
             for proc in batch:
                 seen.setdefault(proc.pid, proc)
                 try:

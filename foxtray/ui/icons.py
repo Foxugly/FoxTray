@@ -7,7 +7,7 @@ from typing import Literal
 
 from PIL import Image
 
-IconState = Literal["running", "partial", "stopped"]
+IconState = Literal["running", "starting", "partial", "stopped"]
 
 def _assets_dir() -> Path:
     if getattr(sys, "frozen", False):
