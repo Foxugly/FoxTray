@@ -304,9 +304,13 @@ def on_restart(
     project: config.Project,
     icon: Notifier,
     user_initiated: set[str],
+    on_done: Callable[[], None] | None = None,
 ) -> None:
     """Stop then start in a background thread. The menu-callback thread
-    returns immediately so pystray stays responsive during the kill/wait."""
+    returns immediately so pystray stays responsive during the kill/wait.
+    ``on_done`` (if given) fires in the worker thread after the restart
+    settles — success or failure — so the caller can refresh the tray
+    without waiting out the poll interval."""
     def _run() -> None:
         user_initiated.add(project.name)
         try:
@@ -314,6 +318,12 @@ def on_restart(
             orchestrator.start(project)
         except Exception as exc:  # noqa: BLE001
             _notify_error(icon, exc)
+        finally:
+            if on_done is not None:
+                try:
+                    on_done()
+                except Exception:  # noqa: BLE001 — refresh hook must not crash the worker
+                    log.warning("on_restart on_done hook failed", exc_info=True)
     threading.Thread(target=_run, name=f"restart-{project.name}", daemon=True).start()
 
 

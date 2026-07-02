@@ -166,4 +166,4 @@ Specs exist; no implementation yet.
 
 - ~~`frontend_port_listening` reports `False` for Angular dev server because of IPv6-only binding~~ — **fixed**: `port_listening` now probes IPv4 then IPv6 by default (commit `7fd847f`).
 - Unsigned `.exe` may trigger Windows Defender / third-party AV false positives on first launch. Mitigation deferred (code signing).
-- Tray tooltip updates on the 3 s poll cadence, not instantly.
+- ~~Tray tooltip updates on the 3 s poll cadence, not instantly.~~ — **fixed**: user-initiated Start/Stop/Restart/Stop-all now wake the poller for an immediate icon+tooltip refresh via `TrayApp.request_refresh()` (poll cadence unchanged as the fallback).
